@@ -1,3 +1,4 @@
+窝加了个bgm章节和角色介绍功能:p
 ![加了个bgm章节和角色介绍功能](https://files.catbox.moe/vx1k5k.png)
 
 ---

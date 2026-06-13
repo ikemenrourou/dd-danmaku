@@ -4,6 +4,8 @@
 
 ![](images/bangumi-feature.png)
 
-安装方法参考上游项目: https://github.com/l429609201/dd-danmaku
+---
 
 Bangumi API: https://github.com/bangumi/api
+
+chen3861229/dd-danmaku: https://github.com/chen3861229/dd-danmaku

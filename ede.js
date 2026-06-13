@@ -44,6 +44,7 @@
         danmaku: { version: '2.0.8', name: 'Danmaku', license: 'MIT License', url: 'https://github.com/weizhenye/Danmaku' },
         dandanplayApi: { version: 'v2', name: '弹弹 play API', license: 'MIT License', url: 'https://github.com/kaedei/dandanplay-libraryindex' },
         bangumiApi: { version: '2025-02-5', name: 'Bangumi API', license: 'None', url: 'https://github.com/bangumi/api' },
+        animekoApi: { version: 'v1', name: 'Animeko Danmaku API', license: 'AGPL-3.0', url: 'https://github.com/open-ani/animeko' },
         embyPluginDanmu: { version: '1.0.2', name: 'EmbyPluginDanmu', license: 'None', url: 'https://github.com/fengymi/emby-plugin-danmu' },
     };
     const dandanplayApi = {
@@ -76,13 +77,27 @@
     const bangumiApi = {
         prefix: 'https://api.bgm.tv/v0',
         accessTokenUrl: 'https://next.bgm.tv/demo/access-token',
+        searchSubjects: (limit = 10, offset = 0) => `${bangumiApi.prefix}/search/subjects?limit=${limit}&offset=${offset}`,
+        getSubject: (subjectId) => `${bangumiApi.prefix}/subjects/${subjectId}`,
+        getEpisodes: (subjectId) => `${bangumiApi.prefix}/episodes?subject_id=${subjectId}&type=0`,
+        getEpisodeById: (episodeId) => `${bangumiApi.prefix}/episodes/${episodeId}`,
         getCharacters: (subjectId) => `${bangumiApi.prefix}/subjects/${subjectId}/characters`,
+        getCharacter: (characterId) => `${bangumiApi.prefix}/characters/${characterId}`,
+        getPerson: (personId) => `${bangumiApi.prefix}/persons/${personId}`,
+        getPersonCharacters: (personId) => `${bangumiApi.prefix}/persons/${personId}/characters`,
         // need auth
         getMe: () => `${bangumiApi.prefix}/me`,
         getUserCollection: (userName, subjectId) => `${bangumiApi.prefix}/users/${userName}/collections/${subjectId}`,
         postUserCollection: (subjectId) => `${bangumiApi.prefix}/users/-/collections/${subjectId}`,
         getUserSubjectEpisodeCollection: (subjectId) => `${bangumiApi.prefix}/users/-/collections/${subjectId}/episodes?offset=0&limit=100`,
         putUserEpisodeCollection: (episodeId ) => `${bangumiApi.prefix}/users/-/collections/-/episodes/${episodeId}`,
+    };
+    const animekoApi = {
+        prefixes: {
+            cn: 'https://danmaku-cn.myani.org',
+            global: 'https://danmaku-global.myani.org',
+        },
+        getDanmaku: (prefix, episodeId) => `${prefix}/v1/danmaku/${episodeId}`,
     };
     const check_interval = 200;
     const LOAD_TYPE = {
@@ -175,6 +190,7 @@
         search: 'search',
         done: 'done_all',
         done_disabled: 'remove_done',
+        info: 'info',
         more: 'more_horiz',
         close: 'close',
         refresh: 'refresh',
@@ -210,6 +226,7 @@
     };
     const danmakuSource = {
         AcFun: { id: 'AcFun', name: 'A站(AcFun)' },
+        Animeko: { id: 'Animeko', name: 'Animeko' },
         BiliBili: { id: 'BiliBili', name: 'B站(BiliBili)' },
         DanDanPlay: { id: 'DanDanPlay', name: '弹弹(DanDanPlay)' }, // 无弹幕来源的默认值
         D: { id: 'D', name: 'D' }, // 未知平台
@@ -232,6 +249,12 @@
     const danmakuMatchModeOpts = [
         { id: 'hashAndFileName', name: '哈希+文件名' },
         { id: 'fileNameOnly', name: '仅文件名' },
+    ];
+    const animekoRouteOpts = [
+        { id: 'cnThenGlobal', name: 'CN优先' },
+        { id: 'globalThenCn', name: 'Global优先' },
+        { id: 'cnOnly', name: '仅CN' },
+        { id: 'globalOnly', name: '仅Global' },
     ];
     const danmakuChConverOpts = [
         { id: '0', name: '未启用' },
@@ -347,6 +370,8 @@
         bangumiEnable: { id: 'danmakuBangumiEnable', defaultValue: false, name: '启用并填写个人令牌' },
         bangumiToken: { id: 'danmakuBangumiToken', defaultValue: '', name: '个人令牌' },
         bangumiPostPercent: { id: 'danmakuBangumiPostPercent', defaultValue: 95, name: '时长比', min: 1, max: 99, step: 1 },
+        animekoEnable: { id: 'danmakuAnimekoEnable', defaultValue: true, name: '附加 Animeko 公益弹幕池' },
+        animekoRoute: { id: 'danmakuAnimekoRoute', defaultValue: 'cnThenGlobal', name: 'Animeko 线路' },
         tmdbApiKey: { id: 'danmakuTmdbApiKey', defaultValue: '', name: 'TMDB API Key' },
         tmdbApiBaseUrl: { id: 'danmakuTmdbApiBaseUrl', defaultValue: 'https://api.themoviedb.org', name: 'TMDB API 域名' },
         tmdbEpisodeMappingEnable: { id: 'danmakuTmdbEpisodeMappingEnable', defaultValue: false, name: '启用集数映射' },
@@ -477,6 +502,10 @@
         bangumiTokenLabel: 'bangumiTokenInputLabel',
         bangumiTokenLinkDiv: 'bangumiTokenLinkDiv',
         bangumiPostPercentDiv: 'bangumiPostPercentDiv',
+        animekoEnableLabel: 'animekoEnableLabel',
+        animekoSettingsDiv: 'animekoSettingsDiv',
+        animekoRouteDiv: 'animekoRouteDiv',
+        animekoRouteDesc: 'animekoRouteDesc',
         tmdbEnableLabel: 'tmdbEnableLabel',
         tmdbSettingsDiv: 'tmdbSettingsDiv',
         tmdbApiKeyInput: 'tmdbApiKeyInput',
@@ -521,6 +550,9 @@
         danmuPluginDiv: 'danmuPluginDiv',
         danmakuSettingBtnDebug: 'danmakuSettingBtnDebug',
         progressBarLineChart: 'progressBarLineChart',
+        episodeDialog: 'episodeDialog',
+        episodeIframe: 'episodeIframe',
+        charactersDialog: 'charactersDialog',
         antiOverlapBtn: 'antiOverlapBtn',
         antiOverlapDiv: 'antiOverlapDiv',
         excludedLibrariesDiv: 'excludedLibrariesDiv',
@@ -539,6 +571,8 @@
     const mediaBtnOpts = [
         { id: eleIds.danmakuSwitchBtn, label: '弹幕开关', iconKey: iconKeys.comment, onClick: doDanmakuSwitch },
         { label: '弹幕设置', iconKey: iconKeys.setting, onClick: createDialog },
+        { label: '章节信息', iconKey: iconKeys.info, onClick: showEpisodeDialog },
+        { label: '角色介绍', iconKey: iconKeys.person, onClick: showCharactersInfo },
     ];
     const customeUrlMsg1 = '限弹弹 play API 兼容结构';
     const customeUrl = {
@@ -899,6 +933,7 @@
             this.ob = null;
             this.loading = false;
             this.danmuCache = {};   // 只包含 comment 未解析
+            this.currentDanmakuDiagnostics = {};
             this.commentsParsed = [];   // 包含 comment 和 extComment 解析后全量
             this.extCommentCache = {};   // 只包含 extComment 未解析
             this.destroyIntervalIds = [];
@@ -1975,6 +2010,192 @@
             });
     }
 
+    function getAnimekoRouteAttempts(routeMode) {
+        switch (routeMode) {
+        case 'globalThenCn':
+            return ['global', 'cn'];
+        case 'cnOnly':
+            return ['cn'];
+        case 'globalOnly':
+            return ['global'];
+        case 'cnThenGlobal':
+        default:
+            return ['cn', 'global'];
+        }
+    }
+
+    function mapAnimekoLocationToMode(location) {
+        return { NORMAL: 1, TOP: 5, BOTTOM: 4 }[location] || 1;
+    }
+
+    function parseSourceUserValue(rawValue) {
+        const text = String(rawValue || '');
+        const matches = text.match(/^\[(.*?)\](.*)$/);
+        return {
+            source: matches && matches[1] ? matches[1] : danmakuSource.DanDanPlay.id,
+            originalUserId: matches && matches[2] ? matches[2] : text,
+        };
+    }
+
+    function normalizeDanmakuColorValue(rawValue, fallback = 16777215) {
+        const num = Number(rawValue);
+        if (!Number.isFinite(num)) { return fallback; }
+        return (num >>> 0) & 0xFFFFFF;
+    }
+
+    function getRawCommentSource(rawComment) {
+        const values = String(rawComment?.p || '').split(',');
+        return parseSourceUserValue(values[3]).source;
+    }
+
+    function buildSourceCounts(items, sourceGetter) {
+        const counts = {};
+        (Array.isArray(items) ? items : []).forEach(item => {
+            const source = sourceGetter(item) || 'Unknown';
+            counts[source] = (counts[source] || 0) + 1;
+        });
+        return counts;
+    }
+
+    function buildSourceStats(items, sourceGetter) {
+        return {
+            total: Array.isArray(items) ? items.length : 0,
+            bySource: buildSourceCounts(items, sourceGetter),
+        };
+    }
+
+    function formatSourceStats(stats) {
+        if (!stats || !stats.bySource) {
+            return 'total=0, bySource=无';
+        }
+        const sourceText = objectEntries(stats.bySource)
+            .sort((a, b) => b[1] - a[1])
+            .map(([source, count]) => `${source}:${count}`)
+            .join(', ') || '无';
+        return `total=${stats.total}, bySource=${sourceText}`;
+    }
+
+    function setDanmakuDiagnosticsStage(stageKey, stats) {
+        if (!window.ede) { return; }
+        if (!window.ede.currentDanmakuDiagnostics || typeof window.ede.currentDanmakuDiagnostics !== 'object') {
+            window.ede.currentDanmakuDiagnostics = {};
+        }
+        if (!window.ede.currentDanmakuDiagnostics.stages || typeof window.ede.currentDanmakuDiagnostics.stages !== 'object') {
+            window.ede.currentDanmakuDiagnostics.stages = {};
+        }
+        window.ede.currentDanmakuDiagnostics.stages[stageKey] = {
+            total: stats.total,
+            bySource: { ...(stats.bySource || {}) },
+        };
+        logger.debug(`[弹幕诊断] ${stageKey}: ${formatSourceStats(stats)}`);
+    }
+
+    function logAnimekoRawSamples(comments, limit = 3) {
+        const animekoSamples = (Array.isArray(comments) ? comments : [])
+            .filter(comment => getRawCommentSource(comment) === danmakuSource.Animeko.id)
+            .slice(0, limit)
+            .map(comment => {
+                const values = String(comment?.p || '').split(',');
+                return `{time=${values[0] || '0'}, text=${JSON.stringify(comment?.m || '')}}`;
+            });
+        if (animekoSamples.length > 0) {
+            logger.debug(`[弹幕诊断] Animeko原始样本: ${animekoSamples.join(' | ')}`);
+        }
+    }
+
+    function logParsedFilterDelta(stageLabel, beforeComments, afterComments, limit = 3) {
+        const beforeList = Array.isArray(beforeComments) ? beforeComments : [];
+        const afterSet = new Set(Array.isArray(afterComments) ? afterComments : []);
+        const removed = beforeList.filter(comment => !afterSet.has(comment));
+        if (removed.length < 1) { return; }
+
+        logger.debug(`[弹幕诊断] ${stageLabel} 移除: ${formatSourceStats(buildSourceStats(removed, comment => comment.source))}`);
+
+        const animekoRemoved = removed
+            .filter(comment => comment.source === danmakuSource.Animeko.id)
+            .slice(0, limit)
+            .map(comment => `{mode=${comment.mode}, color=${String(comment.style?.color || '').slice(0, 7)}, text=${JSON.stringify(comment.originalText || comment.text || '')}}`);
+        if (animekoRemoved.length > 0) {
+            logger.debug(`[弹幕诊断] ${stageLabel} 命中Animeko: ${animekoRemoved.join(' | ')}`);
+        }
+    }
+
+    function convertAnimekoComments(danmakuList) {
+        if (!Array.isArray(danmakuList)) { return []; }
+        return danmakuList.map(item => ({
+            cid: `animeko:${item.id}`,
+            p: `${(Number(item?.danmakuInfo?.playTime || 0) / 1000).toFixed(3)},${mapAnimekoLocationToMode(item?.danmakuInfo?.location)},${normalizeDanmakuColorValue(item?.danmakuInfo?.color, 16777215)},[Animeko]${item?.senderId || 'unknown'}`,
+            m: item?.danmakuInfo?.text || '',
+        })).filter(comment => comment.m);
+    }
+
+    async function fetchAnimekoComments(bgmEpisodeId) {
+        if (!lsGetItem(lsKeys.animekoEnable.id) || !bgmEpisodeId) {
+            return { comments: [], routeUsed: null };
+        }
+
+        const routeMode = lsGetItem(lsKeys.animekoRoute.id);
+        const attempts = getAnimekoRouteAttempts(routeMode);
+        for (const route of attempts) {
+            const prefix = animekoApi.prefixes[route];
+            const routeLabel = route === 'cn' ? 'Animeko CN' : 'Animeko Global';
+            try {
+                const data = await fetchJson(
+                    animekoApi.getDanmaku(prefix, bgmEpisodeId),
+                    { timeoutMs: 8000 }
+                );
+                const comments = convertAnimekoComments(data?.danmakuList);
+                if (comments.length > 0) {
+                    logger.info(`[Animeko] ${routeLabel} 获取成功, 数量: ${comments.length}`);
+                    return { comments, routeUsed: route, routeLabel };
+                }
+                logger.info(`[Animeko] ${routeLabel} 返回空弹幕`);
+            } catch (error) {
+                logger.warn(`[Animeko] ${routeLabel} 获取失败:`, error.message || error);
+            }
+        }
+
+        return { comments: [], routeUsed: null, routeLabel: null };
+    }
+
+    async function fetchOnlineDanmakuComments(episodeInfo) {
+        episodeInfo.animekoRouteUsed = null;
+        const matchedSourceTask = fetchComment(episodeInfo.episodeId, episodeInfo.apiPrefix);
+        const animekoTask = lsGetItem(lsKeys.animekoEnable.id)
+            ? getEpisodeBangumiRel()
+                .then(bangumiInfo => fetchAnimekoComments(bangumiInfo?.bgmEpisodeId).then(result => ({ bangumiInfo, ...result })))
+                .catch((error) => {
+                    logger.warn('[Animeko] Bangumi 直连映射失败，跳过 Animeko 混合:', error.message || error);
+                    return { comments: [], routeUsed: null, routeLabel: null };
+                })
+            : Promise.resolve({ comments: [], routeUsed: null, routeLabel: null });
+
+        const [matchedResult, animekoResult] = await Promise.allSettled([matchedSourceTask, animekoTask]);
+        const mergedComments = [];
+
+        if (matchedResult.status === 'fulfilled' && Array.isArray(matchedResult.value) && matchedResult.value.length > 0) {
+            mergedComments.push(...matchedResult.value);
+        }
+
+        if (animekoResult.status === 'fulfilled' && Array.isArray(animekoResult.value?.comments) && animekoResult.value.comments.length > 0) {
+            mergedComments.push(...animekoResult.value.comments);
+            episodeInfo.animekoRouteUsed = animekoResult.value.routeUsed;
+        }
+
+        if (!Array.isArray(matchedResult.value) || matchedResult.value.length < 1) {
+            logger.info('[在线弹幕] 当前匹配源未获取到有效弹幕');
+        }
+        if ((animekoResult.status !== 'fulfilled' || animekoResult.value.comments.length < 1) && lsGetItem(lsKeys.animekoEnable.id)) {
+            logger.info('[在线弹幕] Animeko 本次未附加到有效弹幕');
+        }
+
+        const rawStats = buildSourceStats(mergedComments, getRawCommentSource);
+        setDanmakuDiagnosticsStage('原始合并后', rawStats);
+        logAnimekoRawSamples(mergedComments);
+
+        return mergedComments;
+    }
+
     function onPlaybackStopPct(e, state) {
         if (!state.NowPlayingItem) { return logger.debug('跳过 Web 端自身错误触发的第二次播放停止事件'); }
         logger.debug('监听到事件: 播放停止 (playbackstop)');
@@ -2001,50 +2222,337 @@
         }
     }
 
-    async function getEpisodeBangumiRel() {
-        const episode_info = window.ede.episode_info;
-        const _bangumi_key = lsLocalKeys.bangumiEpInfoPrefix + episode_info.episodeId;
-        let bangumiInfoLs = localStorage.getItem(_bangumi_key);
-        if (bangumiInfoLs) {
-            bangumiInfoLs = JSON.parse(bangumiInfoLs);
+    function getBangumiCacheKey(episodeInfo = window.ede?.episode_info) {
+        if (!episodeInfo) { return null; }
+        let baseKey = episodeInfo._episode_key;
+        if (!baseKey && episodeInfo.seriesOrMovieId && episodeInfo.episodeIndex !== undefined) {
+            baseKey = `${episodeInfo.seriesOrMovieId}_${episodeInfo.episodeIndex}`;
         }
-        let bangumiEpsRes = bangumiInfoLs ? bangumiInfoLs.bangumiEpsRes : null;
-        let subjectId = bangumiInfoLs ? bangumiInfoLs.subjectId : null;
-        let bangumiUrl = bangumiInfoLs ? bangumiInfoLs.bangumiUrl : null;
-        const animeId = episode_info.animeId;
-        if (!subjectId) {
-            if (!animeId) { throw new Error('未获取到 animeId'); }
-            const danDanPlayBangumiRes = await fetchJson(dandanplayApi.getBangumi(animeId));
-            episode_info.bgmEpisodeIndex = offsetBgmEpisodeIndex(episode_info.bgmEpisodeIndex, danDanPlayBangumiRes.bangumi);
-            bangumiUrl = danDanPlayBangumiRes.bangumi.bangumiUrl;
-            if (!bangumiUrl) { throw new Error('未请求到 bangumiUrl'); }
-            subjectId = parseInt(bangumiUrl.match(/\/(\d+)$/)[1]);
+        if (!baseKey) {
+            baseKey = episodeInfo.episodeId;
         }
-        const episodeIndex = episode_info ? episode_info.episodeIndex : null;
-        const bgmEpisodeIndex = episode_info ? episode_info.bgmEpisodeIndex : null;
-        const bangumiInfo = { animeId, bangumiUrl, subjectId, episodeIndex, bgmEpisodeIndex, bangumiEpsRes, _bangumi_key };
-        window.ede.bangumiInfo = bangumiInfo;
-        localStorage.setItem(bangumiInfo._bangumi_key, JSON.stringify(bangumiInfo));
-        return bangumiInfo;
+        return baseKey ? lsLocalKeys.bangumiEpInfoPrefix + baseKey : null;
     }
 
-    function offsetBgmEpisodeIndex(currentBgmEpisodeIndex, danDanPlayBangumi) {
-        if (!danDanPlayBangumi) {
-            return currentBgmEpisodeIndex;
+    function buildSeasonAwareTitle(title, seasonNumber) {
+        if (!title) { return ''; }
+        if (!seasonNumber || seasonNumber <= 1) { return title.trim(); }
+        return `${title.trim()} 第${seasonNumber}季`;
+    }
+
+    function getBangumiSearchKeywords(episodeInfo) {
+        const seen = new Set();
+        const keywords = [];
+        const add = (title, seasonOverride = null) => {
+            if (!title) { return; }
+            const parsed = parseSearchKeyword(title);
+            const baseTitle = parsed.title || cleanTitleForComparison(title);
+            const seasonNumber = seasonOverride ?? episodeInfo.seasonNumber ?? parsed.season;
+            const keyword = buildSeasonAwareTitle(baseTitle, seasonNumber).trim();
+            if (!keyword) { return; }
+            const normalized = normalizeTitle(keyword);
+            if (!normalized || seen.has(normalized)) { return; }
+            seen.add(normalized);
+            keywords.push(keyword);
+        };
+        add(episodeInfo.seriesName, episodeInfo.seasonNumber);
+        add(episodeInfo.animeOriginalTitle, episodeInfo.seasonNumber);
+        add(episodeInfo.animeTitle, episodeInfo.seasonNumber);
+        return keywords;
+    }
+
+    function scoreBangumiSubject(subject, episodeInfo) {
+        const subjectNames = [subject?.name_cn, subject?.name].filter(Boolean);
+        if (subjectNames.length < 1) { return -1; }
+
+        const targetTitles = getBangumiSearchKeywords(episodeInfo);
+        let nameScore = 0;
+        targetTitles.forEach(targetTitle => {
+            subjectNames.forEach(subjectName => {
+                nameScore = Math.max(nameScore, calculateStringSimilarity(targetTitle, subjectName));
+            });
+        });
+
+        const targetSeason = episodeInfo.seasonNumber || parseSearchKeyword(episodeInfo.animeTitle || '').season || 1;
+        const parsedSubject = parseCandidateTitle(subject.name_cn || subject.name || '');
+        let seasonScore = 0;
+        if (targetSeason > 1) {
+            if (parsedSubject.season === targetSeason) {
+                seasonScore = 0.2;
+            } else if (parsedSubject.season && parsedSubject.season !== targetSeason) {
+                seasonScore = -0.15;
+            }
+        } else if (!parsedSubject.season) {
+            seasonScore = 0.05;
         }
-        let bangumiEp = danDanPlayBangumi.episodes[currentBgmEpisodeIndex];
-        if (!bangumiEp) {
-            logger.debug(`未匹配到 danDanPlayBangumi 番剧集数,剧集不为第一季,尝试切换接口数据匹配返回修正后的 bgmEpisodeIndex`);
-            return danDanPlayBangumi.episodes.findIndex(ep => ep.episodeNumber == currentBgmEpisodeIndex + 1);
-        } else {
-            return currentBgmEpisodeIndex;
+
+        const subjectYear = subject.date ? parseInt(String(subject.date).slice(0, 4), 10) : null;
+        const targetYear = episodeInfo.productionYear || extractYearFromTitle(episodeInfo.animeTitle || '') || extractYearFromTitle(episodeInfo.animeOriginalTitle || '');
+        let yearScore = 0;
+        if (subjectYear && targetYear) {
+            yearScore = subjectYear === targetYear ? 0.08 : Math.abs(subjectYear - targetYear) <= 1 ? 0.03 : -0.05;
+        }
+
+        return nameScore + seasonScore + yearScore;
+    }
+
+    async function findBangumiSubjectBySearch(episodeInfo) {
+        const keywords = getBangumiSearchKeywords(episodeInfo);
+        if (keywords.length < 1) {
+            throw new Error('没有可用于 Bangumi 搜索的标题');
+        }
+
+        let bestResult = null;
+        for (const keyword of keywords) {
+            const searchRes = await fetchJson(
+                bangumiApi.searchSubjects(10),
+                { body: { keyword, sort: 'match', filter: { type: [2] } } }
+            );
+            const subjects = Array.isArray(searchRes?.data) ? searchRes.data : [];
+            if (subjects.length < 1) { continue; }
+
+            subjects.forEach(subject => {
+                const score = scoreBangumiSubject(subject, episodeInfo);
+                if (!bestResult || score > bestResult.score) {
+                    bestResult = { subject, score, keyword };
+                }
+            });
+
+            if (bestResult && bestResult.score >= 0.35) {
+                logger.info(`[Bangumi映射] 搜索命中: "${keyword}" -> ${bestResult.subject.name_cn || bestResult.subject.name} (score=${bestResult.score.toFixed(3)})`);
+                return bestResult.subject;
+            }
+        }
+
+        if (bestResult && bestResult.score >= 0.25) {
+            logger.warn(`[Bangumi映射] 使用低置信度候选: ${bestResult.subject.name_cn || bestResult.subject.name} (score=${bestResult.score.toFixed(3)})`);
+            return bestResult.subject;
+        }
+        throw new Error('未匹配到 Bangumi 动画条目');
+    }
+
+    function findBangumiEpisodeFromList(episodes, episodeInfo) {
+        if (!Array.isArray(episodes) || episodes.length < 1) {
+            return { episode: null, episodeIndex: null };
+        }
+
+        const mainEpisodes = episodes.filter(ep => ep && Number(ep.type) === 0);
+        const targetEpisodes = mainEpisodes.length > 0 ? mainEpisodes : episodes;
+
+        if (String(episodeInfo.episode) === 'movie') {
+            const movieEpisode = targetEpisodes[0] || null;
+            return { episode: movieEpisode, episodeIndex: movieEpisode ? targetEpisodes.indexOf(movieEpisode) : null };
+        }
+
+        const normalizedEpisodeTitle = normalizeTitle(episodeInfo.episodeTitle || '');
+        const expectedEpisodeNumber = Number.isInteger(episodeInfo.episodeIndex)
+            ? episodeInfo.episodeIndex + 1
+            : extractEpisodeNumber(episodeInfo.episodeTitle || '');
+
+        if (Number.isInteger(episodeInfo.bgmEpisodeIndex) && targetEpisodes[episodeInfo.bgmEpisodeIndex]) {
+            return {
+                episode: targetEpisodes[episodeInfo.bgmEpisodeIndex],
+                episodeIndex: episodeInfo.bgmEpisodeIndex,
+            };
+        }
+
+        if (expectedEpisodeNumber) {
+            let exactEpisode = targetEpisodes.find(ep => Number(ep.sort) === expectedEpisodeNumber);
+            if (exactEpisode) {
+                return { episode: exactEpisode, episodeIndex: targetEpisodes.indexOf(exactEpisode) };
+            }
+
+            exactEpisode = targetEpisodes.find(ep => Number(ep.ep) === expectedEpisodeNumber);
+            if (exactEpisode) {
+                return { episode: exactEpisode, episodeIndex: targetEpisodes.indexOf(exactEpisode) };
+            }
+        }
+
+        if (normalizedEpisodeTitle) {
+            const titleEpisode = targetEpisodes.find(ep => {
+                const name = normalizeTitle(ep.name || '');
+                const nameCn = normalizeTitle(ep.name_cn || '');
+                return name && name === normalizedEpisodeTitle || nameCn && nameCn === normalizedEpisodeTitle;
+            });
+            if (titleEpisode) {
+                return { episode: titleEpisode, episodeIndex: targetEpisodes.indexOf(titleEpisode) };
+            }
+        }
+
+        if (expectedEpisodeNumber) {
+            const fallbackByTitleNum = targetEpisodes.find(ep =>
+                extractEpisodeNumber(ep.name || '') === expectedEpisodeNumber
+                || extractEpisodeNumber(ep.name_cn || '') === expectedEpisodeNumber
+            );
+            if (fallbackByTitleNum) {
+                return { episode: fallbackByTitleNum, episodeIndex: targetEpisodes.indexOf(fallbackByTitleNum) };
+            }
+        }
+
+        return { episode: null, episodeIndex: null };
+    }
+
+    function persistBangumiInfo(bangumiInfo, episodeInfo = window.ede?.episode_info) {
+        const prevBangumiInfo = window.ede?.bangumiInfo || {};
+        const reusablePrevInfo = prevBangumiInfo.subjectId === bangumiInfo.subjectId ? prevBangumiInfo : {};
+        const mergedBangumiInfo = { ...reusablePrevInfo, ...bangumiInfo };
+
+        if (episodeInfo) {
+            episodeInfo.bangumiIdHint = mergedBangumiInfo.subjectId || episodeInfo.bangumiIdHint || null;
+            episodeInfo.bgmSubjectId = mergedBangumiInfo.subjectId;
+            episodeInfo.bgmEpisodeId = mergedBangumiInfo.bgmEpisodeId;
+            episodeInfo.bgmEpisodeIndex = mergedBangumiInfo.bgmEpisodeIndex;
+        }
+
+        window.ede.bangumiInfo = mergedBangumiInfo;
+        if (mergedBangumiInfo._bangumi_key) {
+            localStorage.setItem(mergedBangumiInfo._bangumi_key, JSON.stringify(mergedBangumiInfo));
+        }
+        return mergedBangumiInfo;
+    }
+
+    async function resolveBangumiRelBySubjectId(subjectId, episodeInfo, cachedInfo = null) {
+        const [episodesRes, subjectDetail] = await Promise.all([
+            fetchJson(bangumiApi.getEpisodes(subjectId)),
+            fetchJson(bangumiApi.getSubject(subjectId)).catch(error => {
+                logger.debug('[Bangumi映射] 获取条目详情失败，跳过标题补全', error.message || error);
+                return null;
+            }),
+        ]);
+        const episodes = Array.isArray(episodesRes?.data) ? episodesRes.data : [];
+        const { episode, episodeIndex } = findBangumiEpisodeFromList(episodes, episodeInfo);
+        if (!episode) {
+            throw new Error(`未能在 Bangumi subject ${subjectId} 中定位当前章节`);
+        }
+
+        return persistBangumiInfo({
+            ...(cachedInfo || {}),
+            animeId: episodeInfo.animeId,
+            bangumiUrl: `https://bgm.tv/subject/${subjectId}`,
+            subjectId: parseInt(subjectId, 10),
+            subjectName: subjectDetail?.name || cachedInfo?.subjectName || '',
+            subjectNameCn: subjectDetail?.name_cn || cachedInfo?.subjectNameCn || '',
+            bgmSubjectId: parseInt(subjectId, 10),
+            bgmEpisodeId: episode.id,
+            episodeIndex: episodeInfo.episodeIndex ?? null,
+            bgmEpisodeIndex: episodeIndex,
+            _bangumi_key: getBangumiCacheKey(episodeInfo),
+        }, episodeInfo);
+    }
+
+    async function getEpisodeBangumiRel() {
+        const episodeInfo = window.ede?.episode_info;
+        if (!episodeInfo) {
+            throw new Error('未获取到章节信息');
+        }
+
+        const _bangumi_key = getBangumiCacheKey(episodeInfo);
+        let bangumiInfoLs = null;
+        if (_bangumi_key) {
+            const bangumiInfoText = localStorage.getItem(_bangumi_key);
+            if (bangumiInfoText) {
+                try {
+                    bangumiInfoLs = JSON.parse(bangumiInfoText);
+                } catch (error) {
+                    logger.warn('[Bangumi映射] 缓存解析失败，已忽略', error);
+                }
+            }
+        }
+
+        if (episodeInfo.bgmSubjectId && episodeInfo.bgmEpisodeId) {
+            if (!bangumiInfoLs?.subjectName) {
+                try {
+                    const subjectDetail = await fetchJson(bangumiApi.getSubject(episodeInfo.bgmSubjectId));
+                    bangumiInfoLs = {
+                        ...(bangumiInfoLs || {}),
+                        subjectName: subjectDetail?.name || '',
+                        subjectNameCn: subjectDetail?.name_cn || '',
+                    };
+                } catch (error) {
+                    logger.debug('[Bangumi映射] 获取条目详情失败，跳过标题补全', error.message || error);
+                }
+            }
+            return persistBangumiInfo({
+                ...(bangumiInfoLs || {}),
+                animeId: episodeInfo.animeId,
+                bangumiUrl: `https://bgm.tv/subject/${episodeInfo.bgmSubjectId}`,
+                subjectId: episodeInfo.bgmSubjectId,
+                bgmSubjectId: episodeInfo.bgmSubjectId,
+                bgmEpisodeId: episodeInfo.bgmEpisodeId,
+                episodeIndex: episodeInfo.episodeIndex ?? null,
+                bgmEpisodeIndex: episodeInfo.bgmEpisodeIndex ?? null,
+                _bangumi_key,
+            }, episodeInfo);
+        }
+
+        if (bangumiInfoLs?.subjectId && bangumiInfoLs?.bgmEpisodeId) {
+            return persistBangumiInfo({ ...bangumiInfoLs, _bangumi_key }, episodeInfo);
+        }
+
+        const hintedSubjectIds = [
+            episodeInfo.bgmSubjectId,
+            bangumiInfoLs?.subjectId,
+        ].filter(Boolean).map(id => parseInt(id, 10)).filter(id => !isNaN(id));
+
+        const triedSubjectIds = new Set();
+        for (const hintedSubjectId of hintedSubjectIds) {
+            if (triedSubjectIds.has(hintedSubjectId)) { continue; }
+            triedSubjectIds.add(hintedSubjectId);
+            try {
+                return await resolveBangumiRelBySubjectId(hintedSubjectId, episodeInfo, bangumiInfoLs);
+            } catch (error) {
+                logger.warn(`[Bangumi映射] 复用 subjectId ${hintedSubjectId} 失败，准备继续搜索`, error.message || error);
+            }
+        }
+
+        const bangumiSubject = await findBangumiSubjectBySearch(episodeInfo);
+        return resolveBangumiRelBySubjectId(bangumiSubject.id, episodeInfo, bangumiInfoLs);
+    }
+
+    async function getCurrentEpisodeUrl() {
+        try {
+            const bangumiInfo = await getEpisodeBangumiRel();
+            if (!bangumiInfo?.bgmEpisodeId) {
+                throw new Error('未找到对应章节');
+            }
+            return `https://bgm.tv/ep/${bangumiInfo.bgmEpisodeId}`;
+        } catch (error) {
+            logger.error('获取章节URL失败:', error);
+            return null;
+        }
+    }
+
+    async function getCurrentCharacters() {
+        try {
+            const episode_info = window.ede.episode_info;
+            if (!episode_info) {
+                throw new Error('未获取到章节信息');
+            }
+            const cachedBangumiInfo = window.ede.bangumiInfo;
+            const subjectIdHint = parseInt(episode_info.bgmSubjectId, 10);
+            if (cachedBangumiInfo && cachedBangumiInfo.characters
+                && subjectIdHint && cachedBangumiInfo.subjectId === subjectIdHint
+            ) {
+                return cachedBangumiInfo.characters;
+            }
+            const bangumiInfo = await getEpisodeBangumiRel();
+            const characters = await fetchJson(bangumiApi.getCharacters(bangumiInfo.subjectId));
+            bangumiInfo.characters = characters;
+            window.ede.bangumiInfo = bangumiInfo;
+            localStorage.setItem(bangumiInfo._bangumi_key, JSON.stringify(bangumiInfo));
+            return characters;
+        } catch (error) {
+            logger.error('获取角色信息失败:', error);
+            return null;
         }
     }
 
     async function putBangumiEpStatus(token) {
         const bangumiInfo = await getEpisodeBangumiRel();
-        const { subjectId, bgmEpisodeIndex, } = bangumiInfo;
-        const episodeIndex = bgmEpisodeIndex ? bgmEpisodeIndex : bangumiInfo.episodeIndex;
+        const { subjectId, bgmEpisodeId, } = bangumiInfo;
+        if (!bgmEpisodeId) {
+            throw new Error('未匹配到 Bangumi 章节 ID');
+        }
         logger.debug('准备校验 Bangumi 条目收藏状态是否为看过');
         let bangumiMe = localStorage.getItem(lsLocalKeys.bangumiMe);
         if (bangumiMe) {
@@ -2064,15 +2572,14 @@
         await fetchJson(bangumiApi.postUserCollection(subjectId), { token, body });
         if (!bangumiInfo.bangumiEpsRes) {
             const fetchUrl = bangumiApi.getUserSubjectEpisodeCollection(subjectId);
-            const bangumiEpsRes = await fetchJson(fetchUrl, { token });
-            bangumiInfo.bangumiEpsRes = bangumiEpsRes;
-            const bangumiEpColl = bangumiEpsRes.data[episodeIndex];
-            if (!bangumiEpColl) { throw new Error('未匹配到 bangumiEpColl'); }
-            // bangumiInfo.episodeIndex = episodeIndex;
+            bangumiInfo.bangumiEpsRes = await fetchJson(fetchUrl, { token });
         }
-        const bangumiEpColl = bangumiInfo.bangumiEpsRes.data[episodeIndex];
-        const bangumiEp = bangumiEpColl.episode;
-        if (bangumiEpColl.type === 2) {
+        const bangumiEpColl = Array.isArray(bangumiInfo.bangumiEpsRes?.data)
+            ? bangumiInfo.bangumiEpsRes.data.find(item => item?.episode?.id === bgmEpisodeId)
+                || bangumiInfo.bangumiEpsRes.data[bangumiInfo.bgmEpisodeIndex ?? bangumiInfo.episodeIndex ?? -1]
+            : null;
+        const bangumiEp = bangumiEpColl?.episode || { id: bgmEpisodeId };
+        if (bangumiEpColl?.type === 2) {
             msg = 'Bangumi 章节收藏已是看过状态,跳过更新';
             logger.debug(msg, bangumiEp);
             throw new Error(msg);
@@ -2088,7 +2595,7 @@
     }
 
     async function fetchJson(url, opts = {}) {
-    const { token, headers, body } = opts;
+    const { token, headers, body, timeoutMs = 30000 } = opts;
     let { method = 'GET' } = opts;
     if (method === 'GET' && body) method = 'POST';
 
@@ -2114,7 +2621,6 @@
 
     // 统一生命周期管理：可中止的请求
     const controller = new AbortController();
-    const timeoutMs = 30000;
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs); // 30s 超时
 
     // 将控制器注册到全局集合，便于销毁时统一取消
@@ -2612,6 +3118,7 @@
             animeName: animeName,
             seriesName: item.SeriesName || item.Name || '',   // [新增] 系列名称，供集数偏移规则匹配
             seasonNumber: item.ParentIndexNumber || null,     // [新增] 季号，供集数偏移规则匹配
+            productionYear: item.ProductionYear || null,
             seriesOrMovieId: item.SeriesId || item.Id,
             // 新增：提取匹配所需的文件信息
             streamUrl: streamUrl,
@@ -3082,7 +3589,7 @@
 
         const itemInfoMap = await getMapByEmbyItemInfo();
         if (!itemInfoMap) { return null; }
-        const { _episode_key, animeId, episode, seriesOrMovieId, animeName } = itemInfoMap;
+        const { _episode_key, animeId, episode, seriesOrMovieId, animeName, seriesName, seasonNumber, productionYear } = itemInfoMap;
 
         logger.info(`[匹配 #${matchId}] 开始获取弹幕: ${animeName} 第${episode}集`);
 
@@ -3119,12 +3626,16 @@
                     const predictedEpisodeInfo = {
                         ...itemInfoMap,
                         episodeId: predictedEpisodeId,
+                        episode: currentEpisodeNumber,
                         episodeTitle: `第 ${currentEpisodeNumber} 集 (推断)`,
                         animeId: previous_info.animeId,
                         animeTitle: previous_info.animeTitle,
                         imageUrl: previous_info.imageUrl,
                         seriesOrMovieId: seriesOrMovieId,
                         episodeIndex: currentEpisodeNumber - 1,
+                        bangumiIdHint: previous_info.bangumiIdHint || null,
+                        bgmSubjectId: previous_info.bgmSubjectId || null,
+                        bgmEpisodeId: null,
                         // [修复] 携带源信息，确保后续 fetchComment 和下次推理都使用同一个源
                         apiPrefix: prevApiPrefix,
                         apiName: prevApiName,
@@ -3171,6 +3682,7 @@
         if (res.directMatch) {
             const episodeInfo = {
                 episodeId: res.episodeInfo.episodeId,
+                episode: episode,
                 episodeTitle: res.episodeInfo.episodeTitle,
                 // [修复] episodeIndex 必须用实际集数，否则推理匹配(上/下一集 episodeId±1)只在 EP1→EP2 时生效
                 episodeIndex: isNaN(episode) ? 0 : episode - 1,
@@ -3178,6 +3690,13 @@
                 animeTitle: res.episodeInfo.animeTitle,
                 animeOriginalTitle: '',
                 imageUrl: res.episodeInfo.imageUrl,
+                _episode_key: _episode_key,
+                seriesName: seriesName,
+                seasonNumber: seasonNumber,
+                productionYear: productionYear,
+                bangumiIdHint: res.episodeInfo.bangumiId || null,
+                bgmSubjectId: null,
+                bgmEpisodeId: null,
                 apiName: res.apiName,
                 apiPrefix: res.apiPrefix,
             };
@@ -3235,6 +3754,7 @@
 
         const episodeInfo = {
             episodeId: targetEpisode.episodeId,
+            episode: episode,
             episodeTitle: targetEpisode.episodeTitle,
             episodeIndex,
             bgmEpisodeIndex: res.bgmEpisodeIndex ? res.bgmEpisodeIndex : episodeIndex,
@@ -3242,6 +3762,13 @@
             animeTitle: animaInfo.animes[selectAnime_id].animeTitle,
             animeOriginalTitle,
             imageUrl: animaInfo.animes[selectAnime_id].imageUrl,
+            _episode_key: _episode_key,
+            seriesName: seriesName,
+            seasonNumber: seasonNumber,
+            productionYear: productionYear,
+            bangumiIdHint: animaInfo.animes[selectAnime_id].bangumiId || null,
+            bgmSubjectId: null,
+            bgmEpisodeId: null,
             seriesOrMovieId: seriesOrMovieId,
             apiPrefix: apiPrefix, // [修正] 保存API前缀
             apiName: apiName, // [新增] 保存API名称
@@ -3323,8 +3850,10 @@
         const ghostWrappers = document.querySelectorAll(`#${eleIds.danmakuWrapper}`);
         ghostWrappers.forEach(el => el.remove());
 
+        setDanmakuDiagnosticsStage('传入createDanmaku', buildSourceStats(comments, getRawCommentSource));
         const commentsParsed = danmakuParser(comments);
         window.ede.commentsParsed = commentsParsed;
+        setDanmakuDiagnosticsStage('解析后', buildSourceStats(commentsParsed, comment => comment.source));
 
         logger.debug('开始过滤和合并弹幕 (异步)...');
 
@@ -3804,7 +4333,7 @@
                                     logger.debug(err);
                                 });
                         } else {
-                            fetchComment(episodeId).then((comments) => {
+                            fetchOnlineDanmakuComments(window.ede.episode_info).then((comments) => {
                                 // [传证]
                                 if (sessionId && window.ede && sessionId !== window.ede.lastLoadId) return;
 
@@ -3848,12 +4377,19 @@
     async function danmakuFilter(comments) {
         let _comments = [...comments];
         danmakuAutoFilter(_comments);
+        setDanmakuDiagnosticsStage('自动过滤后', buildSourceStats(_comments, comment => comment.source));
         _comments = danmakuTypeFilter(_comments);
+        setDanmakuDiagnosticsStage('类型过滤后', buildSourceStats(_comments, comment => comment.source));
         _comments = danmakuSourceFilter(_comments);
+        setDanmakuDiagnosticsStage('来源过滤后', buildSourceStats(_comments, comment => comment.source));
         _comments = danmakuDensityLevelFilter(_comments);
+        setDanmakuDiagnosticsStage('密度过滤后', buildSourceStats(_comments, comment => comment.source));
         _comments = danmakuKeywordsFilter(_comments);
+        setDanmakuDiagnosticsStage('关键词过滤后', buildSourceStats(_comments, comment => comment.source));
         _comments = await danmakuMergeSimilar(_comments, lsGetItem(lsKeys.mergeSimilarPercent.id), lsGetItem(lsKeys.mergeSimilarTime.id));
+        setDanmakuDiagnosticsStage('相似合并后', buildSourceStats(_comments, comment => comment.source));
         _comments = danmakuAntiOverlapFilter(_comments);
+        setDanmakuDiagnosticsStage('最终加载前', buildSourceStats(_comments, comment => comment.source));
         return _comments;
     }
    /**
@@ -4076,23 +4612,31 @@
         let idArray = lsGetItem(lsKeys.typeFilter.id);
         // 彩色过滤,只留下默认的白色
         if (idArray.includes(danmakuTypeFilterOpts.onlyWhite.id)) {
+            const beforeComments = comments;
             comments = comments.filter(c => '#ffffff' === c.style.color.toLowerCase().slice(0, 7));
+            logParsedFilterDelta('类型过滤.onlyWhite', beforeComments, comments);
             idArray.splice(idArray.indexOf(danmakuTypeFilterOpts.onlyWhite.id), 1);
         }
         // 过滤滚动弹幕
         if (idArray.includes(danmakuTypeFilterOpts.rolling.id)) {
+            const beforeComments = comments;
             comments = comments.filter(c => danmakuTypeFilterOpts.ltr.id !== c.mode
                 && danmakuTypeFilterOpts.rtl.id !== c.mode);
+            logParsedFilterDelta('类型过滤.rolling', beforeComments, comments);
             idArray.splice(idArray.indexOf(danmakuTypeFilterOpts.rolling.id), 1);
         }
         // 按 emoji 过滤
         if (idArray.includes(danmakuTypeFilterOpts.emoji.id)) {
+            const beforeComments = comments;
             comments = comments.filter(c => !emojiRegex.test(c.text));
+            logParsedFilterDelta('类型过滤.emoji', beforeComments, comments);
             idArray.splice(idArray.indexOf(danmakuTypeFilterOpts.emoji.id), 1);
         }
         // 过滤特定模式的弹幕
         if (idArray.length > 0) {
+            const beforeComments = comments;
             comments = comments.filter(c => !idArray.includes(c.mode));
+            logParsedFilterDelta(`类型过滤.mode(${idArray.join(',')})`, beforeComments, comments);
         }
         return comments;
     }
@@ -4337,7 +4881,7 @@
                 // -------------------------
 
                 // 弹幕颜色+透明度
-                const baseColor = Number(values[2]).toString(16).padStart(6, '0');
+                const baseColor = normalizeDanmakuColorValue(values[2]).toString(16).padStart(6, '0');
                 const color = `${baseColor}${fontOpacity}`; // 生成8位十六进制颜色
                 const shadowColor = baseColor === '000000' ? `#ffffff${fontOpacity}` : `#000000${fontOpacity}`;
                 const sourceUidMatches = values[3].match(sourceUidReg);
@@ -4430,6 +4974,1041 @@
         waitForElement('#' + eleIds.dialogContainer, afterEmbyDialogCreated);
     }
 
+    function closeFloatingDialogOnOutsideClick(dialog, triggerEvent) {
+        const close = (event) => {
+            if (!document.body.contains(dialog)) {
+                document.removeEventListener('pointerdown', close, true);
+                return;
+            }
+            if (dialog.contains(event.target)) { return; }
+            if (triggerEvent?.target && triggerEvent.target.contains?.(event.target)) { return; }
+            dialog.remove();
+            document.removeEventListener('pointerdown', close, true);
+        };
+        setTimeout(() => document.addEventListener('pointerdown', close, true), 0);
+    }
+
+    async function showEpisodeDialog(event) {
+        try {
+            const existingDialog = getById(eleIds.episodeDialog);
+            if (existingDialog) {
+                existingDialog.remove();
+                return;
+            }
+
+            const episodeUrl = await getCurrentEpisodeUrl();
+            if (!episodeUrl) {
+                embyAlert({ text: '无法获取章节信息，请确保当前播放的是动画内容' });
+                return;
+            }
+
+            const dialog = document.createElement('div');
+            dialog.id = eleIds.episodeDialog;
+            dialog.style.cssText = [
+                'position: fixed',
+                'bottom: 10vh',
+                'left: 10vw',
+                'width: 80vw',
+                'height: 40vh',
+                'background: rgba(0, 0, 0, 0.85)',
+                'backdrop-filter: blur(10px)',
+                'border: 1px solid rgba(255, 255, 255, 0.2)',
+                'border-radius: 8px',
+                'display: flex',
+                'flex-direction: column',
+                'z-index: 1000',
+                'box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5)',
+            ].join(';');
+
+            const header = document.createElement('div');
+            header.style.cssText = [
+                'padding: 0.8em 1em',
+                'background: rgba(255, 255, 255, 0.1)',
+                'border-bottom: 1px solid rgba(255, 255, 255, 0.2)',
+                'border-radius: 8px 8px 0 0',
+                'display: flex',
+                'justify-content: space-between',
+                'align-items: center',
+            ].join(';');
+
+            const statusText = document.createElement('div');
+            statusText.textContent = '正在加载章节页面...';
+            statusText.style.cssText = 'color: #fff; font-size: 0.9em; opacity: 0.9;';
+            header.append(statusText);
+
+            const buttonGroup = document.createElement('div');
+            buttonGroup.style.cssText = 'display: flex; gap: 0.5em;';
+
+            const openButton = document.createElement('button');
+            openButton.textContent = '在新窗口打开';
+            openButton.style.cssText = [
+                'padding: 0.4em 0.8em',
+                'background: rgba(0, 164, 220, 0.8)',
+                'color: white',
+                'border: none',
+                'border-radius: 4px',
+                'cursor: pointer',
+                'font-size: 0.85em',
+                'transition: background 0.2s',
+            ].join(';');
+            openButton.onmouseover = () => { openButton.style.background = 'rgba(0, 164, 220, 1)'; };
+            openButton.onmouseout = () => { openButton.style.background = 'rgba(0, 164, 220, 0.8)'; };
+            openButton.onclick = () => window.open(episodeUrl, '_blank');
+            buttonGroup.append(openButton);
+
+            const closeButton = document.createElement('button');
+            closeButton.textContent = '关闭';
+            closeButton.style.cssText = [
+                'padding: 0.4em 0.8em',
+                'background: rgba(255, 255, 255, 0.2)',
+                'color: white',
+                'border: none',
+                'border-radius: 4px',
+                'cursor: pointer',
+                'font-size: 0.85em',
+                'transition: background 0.2s',
+            ].join(';');
+            closeButton.onmouseover = () => { closeButton.style.background = 'rgba(255, 255, 255, 0.3)'; };
+            closeButton.onmouseout = () => { closeButton.style.background = 'rgba(255, 255, 255, 0.2)'; };
+            closeButton.onclick = () => dialog.remove();
+            buttonGroup.append(closeButton);
+
+            header.append(buttonGroup);
+            dialog.append(header);
+
+            const iframe = document.createElement('iframe');
+            iframe.id = eleIds.episodeIframe;
+            iframe.src = episodeUrl;
+            iframe.style.cssText = [
+                'flex: 1',
+                'border: 0',
+                'width: 100%',
+                'border-radius: 0 0 8px 8px',
+                'background: rgba(255, 255, 255, 0.05)',
+            ].join(';');
+            iframe.onload = () => {
+                statusText.textContent = '章节页面加载完成';
+                setTimeout(() => { statusText.style.opacity = '0.6'; }, 2000);
+            };
+            dialog.append(iframe);
+
+            document.body.append(dialog);
+            closeFloatingDialogOnOutsideClick(dialog, event);
+        } catch (error) {
+            logger.error('显示章节信息失败:', error);
+            embyAlert({ text: '显示章节信息失败: ' + error.message });
+        }
+    }
+
+    async function showCharactersInfo(event) {
+        let characters = [];
+        let detailPane = null;
+        let detailCache = null;
+        let detailRequests = new Map();
+        let personDetailCache = null;
+        let personCharacterCache = null;
+        let personDetailRequests = new Map();
+        let personCharacterRequests = new Map();
+        let selectedCharacter = null;
+        let cardById = new Map();
+        let workTitle = '';
+
+        try {
+            const existingDialog = getById(eleIds.charactersDialog);
+            if (existingDialog) {
+                existingDialog.remove();
+                return;
+            }
+
+            characters = sortCharactersForDisplay(await getCurrentCharacters());
+            if (!characters || characters.length === 0) {
+                embyAlert({ text: '无法获取角色信息，请确保当前播放的是动画内容' });
+                return;
+            }
+
+            if (!window.ede.characterDetailCache || !(window.ede.characterDetailCache instanceof Map)) {
+                window.ede.characterDetailCache = new Map();
+            }
+            if (!window.ede.personDetailCache || !(window.ede.personDetailCache instanceof Map)) {
+                window.ede.personDetailCache = new Map();
+            }
+            if (!window.ede.personCharacterCache || !(window.ede.personCharacterCache instanceof Map)) {
+                window.ede.personCharacterCache = new Map();
+            }
+            if (!window.ede?.bangumiInfo?.subjectName) {
+                await getEpisodeBangumiRel().catch(error => {
+                    logger.debug('[Bangumi角色] 补全作品标题失败，继续显示角色信息', error.message || error);
+                });
+            }
+            workTitle = window.ede?.bangumiInfo?.subjectName || '';
+            detailCache = window.ede.characterDetailCache;
+            personDetailCache = window.ede.personDetailCache;
+            personCharacterCache = window.ede.personCharacterCache;
+            detailRequests = new Map();
+            personDetailRequests = new Map();
+            personCharacterRequests = new Map();
+            selectedCharacter = characters[0];
+            cardById = new Map();
+
+            const dialog = document.createElement('div');
+            dialog.id = eleIds.charactersDialog;
+            dialog.style.cssText = [
+                'position: fixed',
+                'bottom: 13vh',
+                'left: 3.4vw',
+                'right: 3.4vw',
+                'height: 31vh',
+                'min-height: 238px',
+                'max-height: 286px',
+                'display: flex',
+                'overflow: hidden',
+                'z-index: 1001',
+                'border-radius: 10px',
+                'border: 0',
+                'background: linear-gradient(90deg, rgba(42, 42, 44, 0.46), rgba(24, 25, 28, 0.40))',
+                'box-shadow: inset 0 1px 0 rgba(255,255,255,0.12), inset 0 -1px 0 rgba(0,0,0,0.24), 0 18px 58px rgba(0, 0, 0, 0.28)',
+                'backdrop-filter: blur(32px) saturate(135%)',
+                '-webkit-backdrop-filter: blur(32px) saturate(135%)',
+            ].join(';');
+
+            const localStyle = document.createElement('style');
+            localStyle.textContent = `
+                #${eleIds.charactersDialog} .ede-character-scroll::-webkit-scrollbar { display: none; }
+                #${eleIds.charactersDialog} .ede-character-scroll::-webkit-scrollbar-track { display: none; background: transparent; }
+                #${eleIds.charactersDialog} .ede-character-scroll::-webkit-scrollbar-thumb { display: none; background: transparent; }
+                #${eleIds.charactersDialog} .ede-character-summary::-webkit-scrollbar { display: none; }
+                #${eleIds.charactersDialog} button:focus { outline: none; }
+            `;
+            dialog.append(localStyle);
+
+            detailPane = document.createElement('div');
+            detailPane.style.cssText = [
+                'width: 28%',
+                'min-width: 398px',
+                'max-width: 438px',
+                'padding: 0.46em 0.72em 0.58em',
+                'display: flex',
+                'flex-direction: column',
+                'justify-content: flex-start',
+                'gap: 0.28em',
+                'box-sizing: border-box',
+            ].join(';');
+            dialog.append(detailPane);
+
+            const divider = document.createElement('div');
+            divider.style.cssText = [
+                'width: 1px',
+                'align-self: stretch',
+                'margin: 1.15em 0',
+                'background: linear-gradient(to bottom, rgba(255,255,255,0), rgba(255,255,255,0.18) 22%, rgba(255,255,255,0.18) 78%, rgba(255,255,255,0))',
+            ].join(';');
+            dialog.append(divider);
+
+            const listPane = document.createElement('div');
+            listPane.style.cssText = [
+                'flex: 1',
+                'min-width: 0',
+                'padding: 0.56em 0.72em 0.56em 0.38em',
+                'display: flex',
+                'flex-direction: column',
+                'box-sizing: border-box',
+                'overflow: hidden',
+            ].join(';');
+            dialog.append(listPane);
+
+            const listHeader = document.createElement('div');
+            listHeader.style.cssText = [
+                'display: flex',
+                'align-items: center',
+                'justify-content: space-between',
+                'height: 1.45em',
+                'margin-bottom: 0.22em',
+                'color: rgba(255,255,255,0.92)',
+                'font-size: 0.82em',
+                'font-weight: 600',
+            ].join(';');
+            const listTitle = document.createElement('div');
+            listTitle.textContent = `角色 ${characters.length}`;
+            const closeButton = document.createElement('button');
+            closeButton.textContent = '×';
+            closeButton.title = '关闭';
+            closeButton.style.cssText = [
+                'width: 2em',
+                'height: 2em',
+                'padding: 0',
+                'border: 0',
+                'border-radius: 50%',
+                'background: rgba(255,255,255,0.12)',
+                'color: #fff',
+                'font-size: 1.2em',
+                'line-height: 1',
+                'cursor: pointer',
+            ].join(';');
+            closeButton.onclick = () => dialog.remove();
+            listHeader.append(listTitle, closeButton);
+            listPane.append(listHeader);
+
+            const scrollContainer = document.createElement('div');
+            scrollContainer.className = 'ede-character-scroll';
+            scrollContainer.style.cssText = [
+                'flex: 1',
+                'min-height: 0',
+                'overflow-x: auto',
+                'overflow-y: hidden',
+                'scrollbar-width: none',
+                '-ms-overflow-style: none',
+                'padding-bottom: 48px',
+                'margin-bottom: -48px',
+                'box-sizing: content-box',
+                'clip-path: inset(0 0 48px 0)',
+            ].join(';');
+            listPane.append(scrollContainer);
+
+            const cardContainer = document.createElement('div');
+            cardContainer.style.cssText = [
+                'height: 100%',
+                'display: flex',
+                'align-items: center',
+                'gap: 0.5em',
+                'min-width: max-content',
+                'padding: 0.02em 0.12em 0.02em 0.04em',
+                'box-sizing: border-box',
+            ].join(';');
+            scrollContainer.append(cardContainer);
+
+            characters.forEach(character => {
+                const card = createCharacterCard(character);
+                cardById.set(character.id, card);
+                cardContainer.append(card);
+            });
+
+            document.body.append(dialog);
+            closeFloatingDialogOnOutsideClick(dialog, event);
+            renderSelectedCharacter(selectedCharacter);
+            preloadCharacterDetails();
+        } catch (error) {
+            logger.error('显示角色信息失败:', error);
+            embyAlert({ text: '显示角色信息失败: ' + error.message });
+        }
+
+        function getCharacterImage(character, detail, size = 'medium') {
+            const images = detail?.images || character?.images || {};
+            return images[size] || images.large || images.medium || images.grid || images.small || '';
+        }
+
+        function getPrimaryActor(character) {
+            return Array.isArray(character?.actors) && character.actors.length > 0 ? character.actors[0] : null;
+        }
+
+        function getActorName(character) {
+            return getPrimaryActor(character)?.name || '未知CV';
+        }
+
+        function getPersonImage(actor, detail, size = 'medium') {
+            const images = detail?.images || actor?.images || {};
+            return images[size] || images.large || images.medium || images.grid || images.small || '';
+        }
+
+        function getPersonName(actor, detail) {
+            return getInfoboxValue(detail, '简体中文名') || detail?.name_cn || detail?.name || actor?.name || '未知CV';
+        }
+
+        function getCareerLabel(career) {
+            const careerMap = {
+                seiyu: '声优',
+                actor: '演员',
+                producer: '制作',
+                mangaka: '漫画家',
+                artist: '艺人',
+                writer: '编剧',
+                illustrator: '插画',
+            };
+            return careerMap[career] || career;
+        }
+
+        function getBirthText(detail) {
+            const year = detail?.birth_year;
+            const month = detail?.birth_mon;
+            const day = detail?.birth_day;
+            if (year && month && day) { return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`; }
+            if (month && day) { return `${month}月${day}日`; }
+            return '';
+        }
+
+        function getBloodTypeText(detail) {
+            return ({ 1: 'A型', 2: 'B型', 3: 'AB型', 4: 'O型' }[detail?.blood_type]) || '';
+        }
+
+        function sortCharactersForDisplay(characterList) {
+            const relationRank = (relation = '') => {
+                if (relation.includes('主角')) { return 0; }
+                if (relation.includes('配角')) { return 1; }
+                if (relation.includes('客串')) { return 2; }
+                if (relation.includes('路人')) { return 3; }
+                return 4;
+            };
+            return (Array.isArray(characterList) ? characterList : [])
+                .map((character, index) => ({ character, index }))
+                .sort((a, b) => {
+                    const diff = relationRank(a.character?.relation) - relationRank(b.character?.relation);
+                    return diff || a.index - b.index;
+                })
+                .map(item => item.character);
+        }
+
+        function sortSameCvCharacters(characterList) {
+            const staffRank = (staff = '') => {
+                if (staff.includes('主角')) { return 0; }
+                if (staff.includes('配角')) { return 1; }
+                if (staff.includes('客串')) { return 2; }
+                return 3;
+            };
+            return (Array.isArray(characterList) ? characterList : [])
+                .map((item, index) => ({ item, index }))
+                .sort((a, b) => {
+                    const animeDiff = (a.item?.subject_type === 2 ? 0 : 1) - (b.item?.subject_type === 2 ? 0 : 1);
+                    const staffDiff = staffRank(a.item?.staff) - staffRank(b.item?.staff);
+                    return animeDiff || staffDiff || a.index - b.index;
+                })
+                .map(({ item }) => item);
+        }
+
+        function uniqueCharactersById(characterList) {
+            const seen = new Set();
+            return (Array.isArray(characterList) ? characterList : []).filter(item => {
+                if (!item?.id || seen.has(item.id)) { return false; }
+                seen.add(item.id);
+                return true;
+            });
+        }
+
+        function normalizeInfoboxValue(value) {
+            if (value === null || value === undefined) { return ''; }
+            if (Array.isArray(value)) {
+                return value.map(item => normalizeInfoboxValue(item)).filter(Boolean).join(' / ');
+            }
+            if (typeof value === 'object') {
+                return value.v || value.k || '';
+            }
+            return String(value).trim();
+        }
+
+        function getInfoboxValue(detail, keys) {
+            const keyList = Array.isArray(keys) ? keys : [keys];
+            const items = Array.isArray(detail?.infobox) ? detail.infobox : [];
+            const matched = items.find(item => keyList.includes(item?.key));
+            return normalizeInfoboxValue(matched?.value);
+        }
+
+        function cleanMetaValue(value) {
+            return String(value || '').replace(/^(身高|体重)[:：\s]*/g, '').trim();
+        }
+
+        function getDisplayName(character, detail) {
+            return getInfoboxValue(detail, '简体中文名') || detail?.name_cn || character?.name || '未知角色';
+        }
+
+        function getMetaItems(character, detail) {
+            const gender = getInfoboxValue(detail, '性别') || ({ female: '女', male: '男' }[detail?.gender] || '');
+            const birthday = getInfoboxValue(detail, '生日') || getBirthText(detail);
+            const height = cleanMetaValue(getInfoboxValue(detail, ['身高', '身長']));
+            const bloodType = getInfoboxValue(detail, '血型') || getBloodTypeText(detail);
+            return [character?.relation, gender, birthday, height, bloodType].filter(Boolean);
+        }
+
+        function getCachedDetail(character) {
+            return character?.id ? detailCache.get(character.id) : null;
+        }
+
+        function pickReadableSummary(summary) {
+            const text = String(summary || '').trim();
+            if (!text) { return '暂无角色简介'; }
+            const blocks = text.split(/\n\s*\n/).map(block => block.trim()).filter(Boolean);
+            const hasHan = value => /[\u3400-\u9fff]/.test(value);
+            const hasKana = value => /[\u3040-\u30ff]/.test(value);
+            const firstChineseIndex = blocks.findIndex(block => hasHan(block) && !hasKana(block));
+            if (firstChineseIndex > 0) {
+                return blocks.slice(firstChineseIndex).join('\n');
+            }
+            return text;
+        }
+
+        function getCachedPersonDetail(actor) {
+            return actor?.id ? personDetailCache.get(actor.id) : null;
+        }
+
+        function getCachedPersonCharacters(actor) {
+            return actor?.id ? personCharacterCache.get(actor.id) : null;
+        }
+
+        async function getPersonDetail(actor) {
+            if (!actor?.id) { return null; }
+            if (personDetailCache.has(actor.id)) { return personDetailCache.get(actor.id); }
+            if (personDetailRequests.has(actor.id)) { return personDetailRequests.get(actor.id); }
+            const request = fetchJson(bangumiApi.getPerson(actor.id), { timeoutMs: 12000 })
+                .then(detail => {
+                    personDetailCache.set(actor.id, detail);
+                    return detail;
+                })
+                .catch(error => {
+                    logger.warn(`[Bangumi角色] 获取CV详情失败: ${actor.name}`, error.message || error);
+                    return null;
+                })
+                .finally(() => personDetailRequests.delete(actor.id));
+            personDetailRequests.set(actor.id, request);
+            return request;
+        }
+
+        async function getPersonCharacters(actor) {
+            if (!actor?.id) { return []; }
+            if (personCharacterCache.has(actor.id)) { return personCharacterCache.get(actor.id); }
+            if (personCharacterRequests.has(actor.id)) { return personCharacterRequests.get(actor.id); }
+            const request = fetchJson(bangumiApi.getPersonCharacters(actor.id), { timeoutMs: 12000 })
+                .then(personCharacters => {
+                    const safeList = Array.isArray(personCharacters) ? personCharacters : [];
+                    personCharacterCache.set(actor.id, safeList);
+                    return safeList;
+                })
+                .catch(error => {
+                    logger.warn(`[Bangumi角色] 获取同CV角色失败: ${actor.name}`, error.message || error);
+                    return [];
+                })
+                .finally(() => personCharacterRequests.delete(actor.id));
+            personCharacterRequests.set(actor.id, request);
+            return request;
+        }
+
+        async function getCharacterDetail(character) {
+            if (!character?.id) { return null; }
+            if (detailCache.has(character.id)) { return detailCache.get(character.id); }
+            if (detailRequests.has(character.id)) { return detailRequests.get(character.id); }
+            const request = fetchJson(bangumiApi.getCharacter(character.id), { timeoutMs: 12000 })
+                .then(detail => {
+                    detailCache.set(character.id, detail);
+                    return detail;
+                })
+                .catch(error => {
+                    logger.warn(`[Bangumi角色] 获取角色详情失败: ${character.name}`, error.message || error);
+                    return null;
+                })
+                .finally(() => detailRequests.delete(character.id));
+            detailRequests.set(character.id, request);
+            return request;
+        }
+
+        function renderSelectedCharacter(character) {
+            selectedCharacter = character;
+            cardById.forEach((card, id) => setCardSelected(card, id === character.id));
+            renderDetailPane(character, getCachedDetail(character), true);
+            getCharacterDetail(character).then(detail => {
+                updateCharacterCard(cardById.get(character.id), character, detail);
+                if (selectedCharacter?.id === character.id) {
+                    renderDetailPane(character, detail, false);
+                }
+            });
+            const actor = getPrimaryActor(character);
+            if (actor?.id) {
+                Promise.all([
+                    getPersonDetail(actor),
+                    getPersonCharacters(actor),
+                ]).then(([personDetail, personCharacters]) => {
+                    if (selectedCharacter?.id === character.id) {
+                        renderCvPane(character, actor, personDetail, personCharacters, false);
+                    }
+                });
+            }
+        }
+
+        async function preloadCharacterDetails() {
+            for (const character of characters) {
+                if (!document.body.contains(getById(eleIds.charactersDialog))) { return; }
+                const detail = await getCharacterDetail(character);
+                updateCharacterCard(cardById.get(character.id), character, detail);
+            }
+        }
+
+        function setCardSelected(card, selected) {
+            if (!card) { return; }
+            card.style.boxShadow = selected ? '0 16px 36px rgba(0,0,0,0.50), 0 0 16px rgba(0,0,0,0.16)' : '0 10px 24px rgba(0,0,0,0.34)';
+            card.style.transform = selected ? 'translateY(-2px)' : 'translateY(0)';
+        }
+
+        function createCharacterCard(character) {
+            const card = document.createElement('button');
+            card.type = 'button';
+            card.style.cssText = [
+                'position: relative',
+                'width: 110px',
+                'height: 182px',
+                'min-height: 182px',
+                'padding: 0',
+                'overflow: hidden',
+                'border-radius: 8px',
+                'border: 0',
+                'outline: 0',
+                'background: rgba(0,0,0,0.12)',
+                'cursor: pointer',
+                'transition: transform 0.18s ease, box-shadow 0.18s ease',
+                'box-shadow: 0 10px 24px rgba(0,0,0,0.34)',
+                '-webkit-tap-highlight-color: transparent',
+            ].join(';');
+            card.onclick = () => renderSelectedCharacter(character);
+
+            const image = document.createElement('img');
+            image.src = getCharacterImage(character, null, 'medium');
+            image.alt = character.name || '';
+            image.style.cssText = [
+                'position: absolute',
+                'inset: 0',
+                'width: 100%',
+                'height: 100%',
+                'object-fit: cover',
+                'object-position: center top',
+                'transform: scale(1.12)',
+                'transform-origin: center top',
+            ].join(';');
+            image.onerror = () => {
+                image.remove();
+                card.style.background = 'linear-gradient(160deg, rgba(255,255,255,0.18), rgba(255,255,255,0.04))';
+            };
+            card.append(image);
+
+            const blurWrap = document.createElement('div');
+            blurWrap.style.cssText = [
+                'position: absolute',
+                'left: 0',
+                'right: 0',
+                'bottom: 0',
+                'height: 32%',
+                'overflow: hidden',
+                'mask-image: linear-gradient(to top, #000 0%, #000 58%, rgba(0,0,0,0.45) 82%, rgba(0,0,0,0) 100%)',
+                '-webkit-mask-image: linear-gradient(to top, #000 0%, #000 58%, rgba(0,0,0,0.45) 82%, rgba(0,0,0,0) 100%)',
+                'pointer-events: none',
+            ].join(';');
+            const blurImage = document.createElement('img');
+            blurImage.src = image.src;
+            blurImage.alt = '';
+            blurImage.style.cssText = [
+                'position: absolute',
+                'left: 0',
+                'right: 0',
+                'top: auto',
+                'bottom: 0',
+                'width: 100%',
+                'height: 100%',
+                'object-fit: cover',
+                'object-position: center top',
+                'transform: scale(1.12)',
+                'transform-origin: center top',
+                'filter: blur(8px) brightness(0.55) saturate(1.02)',
+            ].join(';');
+            blurWrap.append(blurImage);
+            card.append(blurWrap);
+
+            const shade = document.createElement('div');
+            shade.style.cssText = [
+                'position: absolute',
+                'left: 0',
+                'right: 0',
+                'bottom: 0',
+                'height: 38%',
+                'background: linear-gradient(to top, rgba(8,8,10,0.92) 0%, rgba(8,8,10,0.72) 34%, rgba(8,8,10,0.24) 74%, rgba(8,8,10,0) 100%)',
+                'pointer-events: none',
+            ].join(';');
+            card.append(shade);
+
+            const overlay = document.createElement('div');
+            overlay.style.cssText = [
+                'position: absolute',
+                'left: 0',
+                'right: 0',
+                'bottom: 0',
+                'height: 38%',
+                'display: flex',
+                'flex-direction: column',
+                'justify-content: flex-end',
+                'padding: 0.95em 0.5em 0.46em',
+                'box-sizing: border-box',
+                'text-align: left',
+            ].join(';');
+
+            const name = document.createElement('div');
+            name.dataset.role = 'name';
+            name.style.cssText = [
+                'color: #fff',
+                'font-size: 0.74em',
+                'font-weight: 700',
+                'line-height: 1.18',
+                'text-shadow: 0 1px 4px rgba(0,0,0,0.9)',
+                'display: -webkit-box',
+                '-webkit-line-clamp: 2',
+                '-webkit-box-orient: vertical',
+                'overflow: hidden',
+            ].join(';');
+            const cv = document.createElement('div');
+            cv.dataset.role = 'cv';
+            cv.style.cssText = [
+                'margin-top: 0.28em',
+                'color: rgba(255,255,255,0.76)',
+                'font-size: 0.58em',
+                'line-height: 1.2',
+                'white-space: nowrap',
+                'overflow: hidden',
+                'text-overflow: ellipsis',
+            ].join(';');
+            const relation = document.createElement('div');
+            relation.dataset.role = 'relation';
+            relation.style.cssText = [
+                'margin-top: 0.3em',
+                'align-self: flex-start',
+                'padding: 0.15em 0.42em',
+                'border-radius: 999px',
+                'background: rgba(101, 77, 45, 0.78)',
+                'color: rgba(255,255,255,0.88)',
+                'font-size: 0.58em',
+                'line-height: 1.25',
+            ].join(';');
+            overlay.append(name, cv, relation);
+            card.append(overlay);
+            updateCharacterCard(card, character, getCachedDetail(character));
+            return card;
+        }
+
+        function updateCharacterCard(card, character, detail) {
+            if (!card) { return; }
+            const name = card.querySelector('[data-role="name"]');
+            const cv = card.querySelector('[data-role="cv"]');
+            const relation = card.querySelector('[data-role="relation"]');
+            if (name) { name.textContent = getDisplayName(character, detail); }
+            if (cv) { cv.textContent = `CV: ${getActorName(character)}`; }
+            if (relation) { relation.textContent = character?.relation || '角色'; }
+        }
+
+        function renderDetailPane(character, detail, loading) {
+            const displayName = getDisplayName(character, detail);
+            const originalName = character?.name && character.name !== displayName ? character.name : '';
+            const actor = getPrimaryActor(character);
+            const actorName = getActorName(character);
+            const imageUrl = getCharacterImage(character, detail, 'large');
+            const metaItems = getMetaItems(character, detail);
+
+            detailPane.innerHTML = '';
+
+            const headingRow = document.createElement('div');
+            headingRow.style.cssText = [
+                'width: 100%',
+                'min-height: 1.2em',
+                'display: flex',
+                'align-items: center',
+                'justify-content: space-between',
+                'gap: 0.8em',
+            ].join(';');
+
+            const heading = document.createElement('div');
+            heading.textContent = workTitle || '';
+            heading.style.cssText = [
+                'min-width: 0',
+                'flex: 1',
+                'color: rgba(255,255,255,0.70)',
+                'font-size: 0.78em',
+                'font-weight: 700',
+                'line-height: 1.2',
+                'white-space: nowrap',
+                'overflow: hidden',
+                'text-overflow: ellipsis',
+                'text-shadow: 0 1px 6px rgba(0,0,0,0.6)',
+            ].join(';');
+            headingRow.append(heading);
+
+            const link = document.createElement('button');
+            link.type = 'button';
+            link.textContent = 'Bangumi';
+            link.title = '打开 Bangumi 角色页';
+            link.style.cssText = [
+                'flex: none',
+                'padding: 0.22em 0.56em',
+                'border: 0',
+                'border-radius: 999px',
+                'background: rgba(255,255,255,0.14)',
+                'color: rgba(255,255,255,0.88)',
+                'font-size: 0.66em',
+                'font-weight: 700',
+                'cursor: pointer',
+                'box-shadow: inset 0 0 0 1px rgba(255,255,255,0.08)',
+            ].join(';');
+            link.onclick = () => window.open(`https://bgm.tv/character/${character.id}`, '_blank');
+            headingRow.append(link);
+            detailPane.append(headingRow);
+
+            const body = document.createElement('div');
+            body.style.cssText = [
+                'width: 100%',
+                'display: flex',
+                'align-items: center',
+                'gap: 0.58em',
+                'min-height: 0',
+                'flex: 1 1 auto',
+            ].join(';');
+            detailPane.append(body);
+
+            const poster = document.createElement('div');
+            poster.style.cssText = [
+                'width: 128px',
+                'min-width: 128px',
+                'height: 152px',
+                'border-radius: 8px',
+                'overflow: hidden',
+                'background: rgba(255,255,255,0.08)',
+                'box-shadow: inset 0 0 0 1px rgba(255,255,255,0.10), 0 10px 28px rgba(0,0,0,0.18)',
+            ].join(';');
+            if (imageUrl) {
+                const image = document.createElement('img');
+                image.src = imageUrl;
+                image.alt = displayName;
+                image.style.cssText = 'width: 100%; height: 100%; object-fit: cover; object-position: center top; transform: scale(1.1); transform-origin: center top;';
+                image.onerror = () => renderCharacterImageFallback(poster);
+                poster.append(image);
+            } else {
+                renderCharacterImageFallback(poster);
+            }
+            body.append(poster);
+
+            const info = document.createElement('div');
+            info.style.cssText = [
+                'flex: 1',
+                'min-width: 0',
+                'display: flex',
+                'flex-direction: column',
+                'justify-content: center',
+                'color: #fff',
+                'padding-top: 0.2em',
+            ].join(';');
+
+            const name = document.createElement('div');
+            name.textContent = displayName;
+            name.style.cssText = [
+                'font-size: 1.08em',
+                'max-width: 100%',
+                'font-weight: 800',
+                'line-height: 1.16',
+                'text-shadow: 0 2px 8px rgba(0,0,0,0.72)',
+                'word-break: break-word',
+            ].join(';');
+            info.append(name);
+
+            if (originalName) {
+                const origin = document.createElement('div');
+                origin.textContent = originalName;
+                origin.style.cssText = 'margin-top: 0.14em; color: rgba(255,255,255,0.58); font-size: 0.78em;';
+                info.append(origin);
+            }
+
+            const cv = document.createElement('div');
+            cv.textContent = `CV: ${actorName}`;
+            cv.style.cssText = 'margin-top: 0.38em; color: rgba(255,255,255,0.9); font-size: 0.76em; font-weight: 650;';
+            info.append(cv);
+
+            const meta = document.createElement('div');
+            meta.style.cssText = [
+                'display: flex',
+                'flex-wrap: wrap',
+                'gap: 0.36em',
+                'margin-top: 0.34em',
+                'min-height: 1.3em',
+            ].join(';');
+            metaItems.forEach(item => {
+                const pill = document.createElement('span');
+                pill.textContent = item;
+                pill.style.cssText = [
+                    'height: 1.68em',
+                    'padding: 0 0.62em',
+                    'display: inline-flex',
+                    'align-items: center',
+                    'justify-content: center',
+                    'box-sizing: border-box',
+                    'border-radius: 999px',
+                    'background: rgba(255,255,255,0.13)',
+                    'color: rgba(255,255,255,0.9)',
+                    'font-size: 0.66em',
+                    'line-height: 1',
+                ].join(';');
+                meta.append(pill);
+            });
+            info.append(meta);
+
+            const summary = document.createElement('div');
+            summary.className = 'ede-character-summary';
+            summary.textContent = loading && !detail ? '正在加载角色资料...' : pickReadableSummary(detail?.summary);
+            summary.style.cssText = [
+                'margin-top: 0.36em',
+                'max-height: 4.35em',
+                'overflow-y: auto',
+                'scrollbar-width: none',
+                '-ms-overflow-style: none',
+                'color: rgba(255,255,255,0.82)',
+                'font-size: 0.70em',
+                'line-height: 1.38',
+                'white-space: pre-line',
+                'text-shadow: 0 1px 4px rgba(0,0,0,0.65)',
+            ].join(';');
+            info.append(summary);
+
+            body.append(info);
+            renderCvPane(character, actor, getCachedPersonDetail(actor), getCachedPersonCharacters(actor), true);
+        }
+
+        function renderCvPane(character, actor, personDetail, personCharacters, loading) {
+            const oldPane = detailPane.querySelector('[data-role="cv-pane"]');
+            if (oldPane) { oldPane.remove(); }
+            const pane = document.createElement('div');
+            pane.dataset.role = 'cv-pane';
+            pane.style.cssText = [
+                'height: 58px',
+                'min-height: 58px',
+                'display: flex',
+                'align-items: center',
+                'gap: 0.58em',
+                'padding: 0.42em 0.48em',
+                'box-sizing: border-box',
+                'border-radius: 8px',
+                'background: rgba(0,0,0,0.16)',
+                'box-shadow: inset 0 0 0 1px rgba(255,255,255,0.055)',
+                'overflow: hidden',
+            ].join(';');
+
+            if (!actor?.id) {
+                const empty = document.createElement('div');
+                empty.textContent = '暂无 CV 资料';
+                empty.style.cssText = 'color: rgba(255,255,255,0.58); font-size: 0.70em;';
+                pane.append(empty);
+                detailPane.append(pane);
+                return;
+            }
+
+            const avatar = document.createElement('div');
+            avatar.style.cssText = [
+                'width: 38px',
+                'height: 38px',
+                'min-width: 38px',
+                'border-radius: 7px',
+                'overflow: hidden',
+                'background: rgba(255,255,255,0.08)',
+            ].join(';');
+            const avatarUrl = getPersonImage(actor, personDetail, 'medium');
+            if (avatarUrl) {
+                const img = document.createElement('img');
+                img.src = avatarUrl;
+                img.alt = getPersonName(actor, personDetail);
+                img.style.cssText = 'width: 100%; height: 100%; object-fit: cover; object-position: center top;';
+                img.onerror = () => renderCharacterImageFallback(avatar);
+                avatar.append(img);
+            } else {
+                renderCharacterImageFallback(avatar);
+            }
+            pane.append(avatar);
+
+            const cvInfo = document.createElement('div');
+            cvInfo.style.cssText = [
+                'width: 94px',
+                'min-width: 94px',
+                'overflow: hidden',
+            ].join(';');
+            const cvName = document.createElement('div');
+            cvName.textContent = getPersonName(actor, personDetail);
+            cvName.style.cssText = 'color: #fff; font-size: 0.72em; font-weight: 750; line-height: 1.18; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;';
+            const careers = Array.isArray(personDetail?.career) ? personDetail.career.map(getCareerLabel).filter(Boolean).slice(0, 2).join(' / ') : '';
+            const cvCareer = document.createElement('div');
+            cvCareer.textContent = loading && !personDetail ? 'CV 资料加载中' : (careers || 'CV');
+            cvCareer.style.cssText = 'margin-top: 0.22em; color: rgba(255,255,255,0.58); font-size: 0.58em; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;';
+            cvInfo.append(cvName, cvCareer);
+            pane.append(cvInfo);
+
+            const sameCv = document.createElement('div');
+            sameCv.style.cssText = [
+                'flex: 1',
+                'min-width: 0',
+                'display: flex',
+                'align-items: center',
+                'gap: 0.34em',
+                'overflow: hidden',
+            ].join(';');
+            const related = uniqueCharactersById(sortSameCvCharacters(personCharacters))
+                .filter(item => item?.id && item.id !== character.id)
+                .filter(item => item?.subject_type === 2 || !item?.subject_type)
+                .slice(0, 4);
+            if (related.length < 1) {
+                const loadingText = document.createElement('div');
+                loadingText.textContent = loading ? '同 CV 角色加载中' : '暂无同 CV 角色';
+                loadingText.style.cssText = 'color: rgba(255,255,255,0.50); font-size: 0.62em;';
+                sameCv.append(loadingText);
+            } else {
+                related.forEach(item => sameCv.append(createSameCvChip(item)));
+            }
+            pane.append(sameCv);
+            detailPane.append(pane);
+        }
+
+        function createSameCvChip(item) {
+            const chip = document.createElement('button');
+            chip.type = 'button';
+            chip.title = `${item.name || ''}${item.subject_name_cn || item.subject_name ? ' / ' + (item.subject_name_cn || item.subject_name) : ''}`;
+            chip.style.cssText = [
+                'width: 42px',
+                'min-width: 42px',
+                'height: 42px',
+                'position: relative',
+                'padding: 0',
+                'border: 0',
+                'outline: 0',
+                'border-radius: 7px',
+                'overflow: hidden',
+                'background: rgba(255,255,255,0.08)',
+                'cursor: pointer',
+                'box-shadow: 0 6px 16px rgba(0,0,0,0.22)',
+            ].join(';');
+            chip.onclick = (event) => {
+                event.stopPropagation();
+                window.open(`https://bgm.tv/character/${item.id}`, '_blank');
+            };
+            chip.onkeydown = (event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    chip.click();
+                }
+            };
+            const imageUrl = getCharacterImage(item, null, 'grid');
+            if (imageUrl) {
+                const img = document.createElement('img');
+                img.src = imageUrl;
+                img.alt = item.name || '';
+                img.style.cssText = 'width: 100%; height: 100%; object-fit: cover; object-position: center top;';
+                img.onerror = () => renderCharacterImageFallback(chip);
+                chip.append(img);
+            } else {
+                renderCharacterImageFallback(chip);
+            }
+            return chip;
+        }
+
+        function renderCharacterImageFallback(container) {
+            container.innerHTML = '';
+            const fallback = document.createElement('div');
+            fallback.textContent = '暂无图片';
+            fallback.style.cssText = [
+                'display: flex',
+                'align-items: center',
+                'justify-content: center',
+                'width: 100%',
+                'height: 100%',
+                'background: rgba(255, 255, 255, 0.08)',
+                'color: rgba(255,255,255,0.62)',
+                'font-size: 0.82em',
+                'text-align: center',
+            ].join(';');
+            container.append(fallback);
+        }
+    }
+
     async function afterEmbyDialogCreated(dialogContainer) {
         const itemInfoMap = await getMapByEmbyItemInfo();
         if (itemInfoMap) {
@@ -4440,7 +6019,10 @@
                 animeId: itemInfoMap.animeId,
                 animeName: itemInfoMap.animeName,
                 seriesName: itemInfoMap.seriesName,
+                seasonNumber: itemInfoMap.seasonNumber,
+                productionYear: itemInfoMap.productionYear,
                 seriesOrMovieId: itemInfoMap.seriesOrMovieId,
+                episodeRaw: itemInfoMap.episode,
                 episode: (parseInt(itemInfoMap.episode) || 1) - 1, // convert to index
                 animes: [],
             }
@@ -4888,9 +6470,9 @@
                     <div style="display: flex; justify-content: space-between; align-items: center;">
                         <div>
                             <div id="${eleIds.currentMatchedDiv}">
-                                <label class="${classes.embyLabel}">弹弹 play 总量: ${comments.length}</label>
+                                <label class="${classes.embyLabel}">在线弹幕总量: ${comments.length}</label>
                             </div>
-                            <label class="${classes.embyLabel}">弹弹 play 附加的第三方 url: </label>
+                            <label class="${classes.embyLabel}">当前匹配源附加的第三方 url: </label>
                         </div>
                         <button is="emby-button" type="button" class="raised emby-button" id="btnClearLocalMatchCache">清除本地匹配缓存</button>
                     </div>
@@ -4944,7 +6526,13 @@
                     window.ede.episode_info.animeId = null;
                     window.ede.episode_info.animeTitle = null;
                     window.ede.episode_info.episodeTitle = null;
+                    window.ede.episode_info.bangumiIdHint = null;
+                    window.ede.episode_info.bgmSubjectId = null;
+                    window.ede.episode_info.bgmEpisodeId = null;
+                    window.ede.episode_info.animekoRouteUsed = null;
                 }
+
+                window.ede.bangumiInfo = {};
 
                 // [修复] 清除搜索选项中的缓存数据
                 if (window.ede.searchDanmakuOpts) {
@@ -5290,11 +6878,16 @@
             embyButton({ label: '取消匹配/清空弹幕', iconKey: iconKeys.close }, (e) => {
                 if (window.ede.episode_info && window.ede.episode_info.episodeId) {
                     window.ede.episode_info.episodeId = null;
+                    window.ede.episode_info.bangumiIdHint = null;
+                    window.ede.episode_info.bgmSubjectId = null;
+                    window.ede.episode_info.bgmEpisodeId = null;
+                    window.ede.episode_info.animekoRouteUsed = null;
                 }
+                window.ede.bangumiInfo = {};
                 if (window.ede.danmaku) {
                     createDanmaku([]);
                 }
-                currentMatchedDiv.querySelector('label').textContent = '弹弹 play 总量: 0';
+                currentMatchedDiv.querySelector('label').textContent = '在线弹幕总量: 0';
             })
         );
     }
@@ -5315,9 +6908,29 @@
     function buildCurrentDanmakuInfo(containerId) {
         const container = getById(containerId);
         if (!container) { return; }
-        const { episodeTitle, animeId, animeTitle, imageUrl, apiName, apiPrefix } = window.ede.episode_info || {};
+        const { episodeTitle, animeId, animeTitle, imageUrl, apiName, apiPrefix, animekoRouteUsed } = window.ede.episode_info || {};
         const loadSum = getDanmakuComments(window.ede).length;
         const downloadSum = window.ede.commentsParsed.length;
+        const diagnosticsStages = window.ede.currentDanmakuDiagnostics?.stages || {};
+        const rawStage = diagnosticsStages['传入createDanmaku'] || diagnosticsStages['原始合并后'];
+        const loadedStage = diagnosticsStages['最终加载前'];
+        const animekoRawCount = rawStage?.bySource?.[danmakuSource.Animeko.id] || 0;
+        const animekoLoadedCount = loadedStage?.bySource?.[danmakuSource.Animeko.id] || 0;
+        const loadedSourceSummary = loadedStage?.bySource
+            ? objectEntries(loadedStage.bySource)
+                .sort((a, b) => b[1] - a[1])
+                .map(([source, count]) => `${source}:${count}`)
+                .join(', ')
+            : '';
+        const animekoStatsHtml = (lsGetItem(lsKeys.animekoEnable.id) || animekoRawCount > 0 || animekoLoadedCount > 0)
+            ? `<div>
+                        <label class="${classes.embyLabel}">Animeko附加: </label>
+                        <div class="${classes.embyFieldDesc}">
+                            原始: ${animekoRawCount},
+                            最终加载: ${animekoLoadedCount}
+                        </div>
+                    </div>`
+            : '';
         let template = `
             <div style="display: flex;">
                 <div id="${eleIds.posterImgDiv}"></div>
@@ -5335,14 +6948,25 @@
                         <label class="${classes.embyLabel}">匹配来源: </label>
                         <div class="${classes.embyFieldDesc}">${apiName || '未知'}</div>
                     </div>
+                    ${animekoRouteUsed
+                        ? `<div>
+                        <label class="${classes.embyLabel}">Animeko线路: </label>
+                        <div class="${classes.embyFieldDesc}">${animekoRouteUsed === 'cn' ? 'CN' : 'Global'}</div>
+                    </div>`
+                        : ''}
                     <div>
-                        <label class="${classes.embyLabel}">其它信息: </label>
+                        <label class="${classes.embyLabel}">弹幕统计: </label>
                         <div class="${classes.embyFieldDesc}">
                             获取总数: ${downloadSum},
                             加载总数: ${loadSum},
                             被过滤数: ${downloadSum - loadSum}
                         </div>
                     </div>
+                    ${animekoStatsHtml}
+                    ${!loadedSourceSummary ? '' : `<div>
+                        <label class="${classes.embyLabel}">当前显示来源: </label>
+                        <div class="${classes.embyFieldDesc}">${loadedSourceSummary}</div>
+                    </div>`}
                 </div>
             </div>
             <div style="margin-top: 2%;">
@@ -5406,7 +7030,7 @@
         });
         let danmuListTabOpts = danmuListOpts;
         if (danmuListExts.length > 0) {
-            const dandanplayListOpt = { id: 'dandanplay', name: '弹弹 play', onChange: () => {
+            const dandanplayListOpt = { id: 'dandanplay', name: '在线弹幕', onChange: () => {
                 const comments = window.ede.danmuCache[episodeId];
                 return comments ? danmakuParser(comments) : [];
             } };
@@ -5423,7 +7047,9 @@
             , (val, opts) => {
                 if (val === '12') { val = 'auto'; }
                 onSliderChangeLabel(val, opts);
-                Array.from(getById(eleIds.charactersDiv).children)
+                const charactersDiv = getById(eleIds.charactersDiv, container) || getById(eleIds.charactersDiv);
+                if (!charactersDiv) { return; }
+                Array.from(charactersDiv.children)
                     .map(c => c.style.height = val === 'auto' ? val : val + 'em');
             }
         ));
@@ -5436,8 +7062,8 @@
                 e.target.firstChild.innerHTML = xChecked ? iconKeys.close : iconKeys.more;
                 const extInfoDiv = getById(eleIds.extInfoDiv);
                 extInfoDiv.hidden = !xChecked;
-                const charactersDiv = getById(eleIds.charactersDiv);
-                if (charactersDiv.firstChild) { return; }
+                const charactersDiv = getById(eleIds.charactersDiv, container) || getById(eleIds.charactersDiv);
+                if (!charactersDiv || charactersDiv.firstChild) { return; }
                 const bangumiInfo = window.ede.bangumiInfo;
                 if (bangumiInfo && bangumiInfo.characters
                     && bangumiInfo.animeId === window.ede.episode_info.animeId
@@ -5445,9 +7071,13 @@
                     return renderBangumiCharacters(charactersDiv, bangumiInfo.characters);
                 }
                 getEpisodeBangumiRel().then(bangumiInfo => {
-                    return fetchJson(bangumiApi.getCharacters(bangumiInfo.subjectId));
-                }).then(characters => {
+                    return fetchJson(bangumiApi.getCharacters(bangumiInfo.subjectId)).then(characters => ({ bangumiInfo, characters }));
+                }).then(({ bangumiInfo, characters }) => {
                     bangumiInfo.characters = characters;
+                    window.ede.bangumiInfo = bangumiInfo;
+                    if (bangumiInfo._bangumi_key) {
+                        localStorage.setItem(bangumiInfo._bangumi_key, JSON.stringify(bangumiInfo));
+                    }
                     renderBangumiCharacters(charactersDiv, characters);
                 });
                 function renderBangumiCharacters(container, characters) {
@@ -5598,6 +7228,17 @@
                 </div>
                 <div is="emby-collapse" title="Bangumi 设置">
                     <div class="${classes.collapseContentNav}" style="padding-top: 0.5em !important;">
+                        <label id="${eleIds.animekoEnableLabel}" class="${classes.embyLabel}"></label>
+                        <div id="${eleIds.animekoSettingsDiv}">
+                            <div class="${classes.embyFieldDesc}">
+                                Animeko 公益弹幕池会基于 Bangumi 章节 ID 追加读取，并与当前匹配到的弹幕一起显示。
+                            </div>
+                            <div style="${styles.embySlider}">
+                                <label class="${classes.embyLabel}" style="width: 6em;">${lsKeys.animekoRoute.name}: </label>
+                                <div id="${eleIds.animekoRouteDiv}" style="width: 24em;"></div>
+                            </div>
+                            <div id="${eleIds.animekoRouteDesc}" class="${classes.embyFieldDesc}" style="padding-bottom: 0.8em;"></div>
+                        </div>
                         <label id="${eleIds.bangumiEnableLabel}" class="${classes.embyLabel}"></label>
                         <div id="${eleIds.bangumiSettingsDiv}">
                             <div id="${eleIds.bangumiTokenInputDiv}" style="display: flex;" ></div>
@@ -6002,6 +7643,40 @@
     }
 
     function buildBangumiSetting(container) {
+        const animekoSettingsDiv = getById(eleIds.animekoSettingsDiv, container);
+        const animekoEnableLabel = getById(eleIds.animekoEnableLabel, container);
+        animekoEnableLabel.append(embyCheckbox(
+            { label: lsKeys.animekoEnable.name }, lsGetItem(lsKeys.animekoEnable.id), (checked) => {
+                lsSetItem(lsKeys.animekoEnable.id, checked);
+                animekoSettingsDiv.hidden = !checked;
+                if (window.ede?.episode_info?.episodeId) {
+                    loadDanmaku(LOAD_TYPE.REFRESH);
+                }
+            }
+        ));
+        animekoSettingsDiv.hidden = !lsGetItem(lsKeys.animekoEnable.id);
+        const animekoRouteDesc = getById(eleIds.animekoRouteDesc, container);
+        const updateAnimekoRouteDesc = (routeObj) => {
+            const routeTips = {
+                cnThenGlobal: '默认先走 CN，失败或空结果时自动切到 Global。',
+                globalThenCn: '默认先走 Global，失败或空结果时自动切到 CN。',
+                cnOnly: '只走 CN，不自动切到 Global。',
+                globalOnly: '只走 Global，不自动切到 CN。',
+            };
+            animekoRouteDesc.textContent = routeTips[routeObj.id] || routeTips.cnThenGlobal;
+        };
+        const currentAnimekoRoute = animekoRouteOpts.find(opt => opt.id === lsGetItem(lsKeys.animekoRoute.id)) || animekoRouteOpts[0];
+        getById(eleIds.animekoRouteDiv, container).append(
+            embyTabs(animekoRouteOpts, currentAnimekoRoute.id, 'id', 'name', (value) => {
+                lsSetItem(lsKeys.animekoRoute.id, value.id);
+                updateAnimekoRouteDesc(value);
+                if (window.ede?.episode_info?.episodeId && lsGetItem(lsKeys.animekoEnable.id)) {
+                    loadDanmaku(LOAD_TYPE.REFRESH);
+                }
+            })
+        );
+        updateAnimekoRouteDesc(currentAnimekoRoute);
+
         const bangumiSettingsDiv = getById(eleIds.bangumiSettingsDiv, container);
         const bangumiEnable = lsGetItem(lsKeys.bangumiEnable.id);
         bangumiSettingsDiv.hidden = !bangumiEnable;
@@ -7598,6 +9273,7 @@
         const { _episode_key, seriesOrMovieId } = window.ede.searchDanmakuOpts;
         const episodeInfo = {
             episodeId: episodeNumSelect.value,
+            episode: window.ede.searchDanmakuOpts.episodeRaw,
             episodeTitle: episodeNumSelect.options[episodeNumSelect.selectedIndex].text,
             episodeIndex: episodeNumSelect.selectedIndex,
             bgmEpisodeIndex: episodeNumSelect.selectedIndex, 
@@ -7605,6 +9281,13 @@
             animeTitle: anime.animeTitle,
             animeOriginalTitle: '', 
             imageUrl: anime.imageUrl,
+            _episode_key: _episode_key,
+            seriesName: window.ede.searchDanmakuOpts.seriesName || anime.animeTitle,
+            seasonNumber: window.ede.searchDanmakuOpts.seasonNumber || null,
+            productionYear: window.ede.searchDanmakuOpts.productionYear || null,
+            bangumiIdHint: anime.bangumiId || null,
+            bgmSubjectId: null,
+            bgmEpisodeId: null,
             apiPrefix: anime.apiPrefix, 
             apiName: anime.apiName, 
             seriesOrMovieId: seriesOrMovieId,

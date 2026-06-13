@@ -2,7 +2,7 @@
 
 增加了 Bangumi 角色介绍功能
 
-![Bangumi角色介绍](images/bangumi-feature.png)
+![Bangumi角色介绍](https://raw.githubusercontent.com/ikemenrourou/dd-danmaku/main/images/bangumi-feature.png)
 
 ---
 

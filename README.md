@@ -1,5 +1,15 @@
 # emby-danmaku
 
+## 项目说明
+
+本项目是基于 [l429609201/dd-danmaku](https://github.com/l429609201/dd-danmaku) 进行的魔改版本。
+
+> **注意**：虽然 GitHub 显示本仓库 fork 自 `chen3861229/dd-danmaku`，但实际的代码基础和同步来源是 `l429609201/dd-danmaku` 版本。
+
+- **原始仓库（已归档）**: https://github.com/ikemenrourou/dd-danmaku
+- **实际上游**: https://github.com/l429609201/dd-danmaku
+- **魔改维护者**: ikemenrourou
+
 ## Emby 弹幕插件
 
 这是一个为 Emby 设计的弹幕插件，它能够从弹弹play获取弹幕并显示在播放器中。

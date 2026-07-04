@@ -1108,7 +1108,7 @@
         // Emby 点"下一集/上一集"时不会离开 video-osd 页面，beforeDestroy 不会触发，
         // 必须在 playbackstop 时保存，否则推理匹配永远拿不到上一集的信息
         if (window.ede && window.ede.episode_info) {
-            window.ede.previous_episode_info = window.ede.episode_info;
+            window.ede.previous_episode_info = { ...window.ede.episode_info };
             logger.debug(`[推理匹配] 已保存当前集信息: episodeId=${window.ede.episode_info.episodeId}, episodeIndex=${window.ede.episode_info.episodeIndex}`);
         }
         onPlaybackStopPct(e, state);
@@ -2322,13 +2322,16 @@
         logger.debug(`结束播放百分比: ${pct}%`);
         const bangumiPostPercent = lsGetItem(lsKeys.bangumiPostPercent.id);
         const bangumiToken = lsGetItem(lsKeys.bangumiToken.id);
+        const currentEpisodeInfo = window.ede.episode_info;
         if (lsGetItem(lsKeys.bangumiEnable.id) && bangumiToken
-            && pct >= bangumiPostPercent && window.ede.episode_info.episodeId
+            && pct >= bangumiPostPercent && (currentEpisodeInfo?.episodeId || currentEpisodeInfo?.bgmEpisodeId)
         ) {
             logger.debug(`大于需提交的设定百分比: ${bangumiPostPercent}%`);
-            const { animeTitle, episodeTitle } = window.ede.episode_info;
+            const { animeTitle, episodeTitle } = currentEpisodeInfo;
             const targetName = `${animeTitle} - ${episodeTitle}`;
-            putBangumiEpStatus(bangumiToken).then(res => {
+            const episodeInfo = { ...currentEpisodeInfo };
+            const backgroundFetchOpts = { abortOnDestroy: false };
+            putBangumiEpStatus(bangumiToken, { episodeInfo, fetchOpts: backgroundFetchOpts }).then(res => {
                 embyToast({ text: `Bangumi收藏更新成功, 目标: ${targetName}, 结束播放百分比: ${pct}%, 大于需提交的设定百分比: ${bangumiPostPercent}%`});
                 logger.info(`Bangumi收藏更新成功, 目标: ${targetName}`);
             }).catch(error => {
@@ -2412,7 +2415,7 @@
         return nameScore + seasonScore + yearScore;
     }
 
-    async function findBangumiSubjectBySearch(episodeInfo) {
+    async function findBangumiSubjectBySearch(episodeInfo, fetchOpts = {}) {
         const keywords = getBangumiSearchKeywords(episodeInfo);
         if (keywords.length < 1) {
             throw new Error('没有可用于 Bangumi 搜索的标题');
@@ -2422,7 +2425,7 @@
         for (const keyword of keywords) {
             const searchRes = await fetchJson(
                 bangumiApi.searchSubjects(10),
-                { body: { keyword, sort: 'match', filter: { type: [2] } } }
+                { ...fetchOpts, body: { keyword, sort: 'match', filter: { type: [2] } } }
             );
             const subjects = Array.isArray(searchRes?.data) ? searchRes.data : [];
             if (subjects.length < 1) { continue; }
@@ -2447,6 +2450,21 @@
         throw new Error('未匹配到 Bangumi 动画条目');
     }
 
+    function isValidEpisodeIndex(value) {
+        if (value === null || value === undefined || value === '') { return false; }
+        const num = Number(value);
+        return Number.isInteger(num) && num >= 0;
+    }
+
+    function deriveBgmEpisodeIndex(episodeInfo, fallbackEpisodeIndex, delta = 0) {
+        const baseIndex = isValidEpisodeIndex(episodeInfo?.bgmEpisodeIndex)
+            ? Number(episodeInfo.bgmEpisodeIndex)
+            : Number(fallbackEpisodeIndex);
+        if (!Number.isInteger(baseIndex) || baseIndex < 0) { return null; }
+        const derivedIndex = baseIndex + delta;
+        return derivedIndex >= 0 ? derivedIndex : null;
+    }
+
     function findBangumiEpisodeFromList(episodes, episodeInfo) {
         if (!Array.isArray(episodes) || episodes.length < 1) {
             return { episode: null, episodeIndex: null };
@@ -2465,10 +2483,10 @@
             ? episodeInfo.episodeIndex + 1
             : extractEpisodeNumber(episodeInfo.episodeTitle || '');
 
-        if (Number.isInteger(episodeInfo.bgmEpisodeIndex) && targetEpisodes[episodeInfo.bgmEpisodeIndex]) {
+        if (isValidEpisodeIndex(episodeInfo.bgmEpisodeIndex) && targetEpisodes[Number(episodeInfo.bgmEpisodeIndex)]) {
             return {
-                episode: targetEpisodes[episodeInfo.bgmEpisodeIndex],
-                episodeIndex: episodeInfo.bgmEpisodeIndex,
+                episode: targetEpisodes[Number(episodeInfo.bgmEpisodeIndex)],
+                episodeIndex: Number(episodeInfo.bgmEpisodeIndex),
             };
         }
 
@@ -2527,10 +2545,10 @@
         return mergedBangumiInfo;
     }
 
-    async function resolveBangumiRelBySubjectId(subjectId, episodeInfo, cachedInfo = null) {
+    async function resolveBangumiRelBySubjectId(subjectId, episodeInfo, cachedInfo = null, fetchOpts = {}) {
         const [episodesRes, subjectDetail] = await Promise.all([
-            fetchJson(bangumiApi.getEpisodes(subjectId)),
-            fetchJson(bangumiApi.getSubject(subjectId)).catch(error => {
+            fetchJson(bangumiApi.getEpisodes(subjectId), fetchOpts),
+            fetchJson(bangumiApi.getSubject(subjectId), fetchOpts).catch(error => {
                 logger.debug('[Bangumi映射] 获取条目详情失败，跳过标题补全', error.message || error);
                 return null;
             }),
@@ -2556,8 +2574,7 @@
         }, episodeInfo);
     }
 
-    async function getEpisodeBangumiRel() {
-        const episodeInfo = window.ede?.episode_info;
+    async function getEpisodeBangumiRel(episodeInfo = window.ede?.episode_info, fetchOpts = {}) {
         if (!episodeInfo) {
             throw new Error('未获取到章节信息');
         }
@@ -2578,7 +2595,7 @@
         if (episodeInfo.bgmSubjectId && episodeInfo.bgmEpisodeId) {
             if (!bangumiInfoLs?.subjectName) {
                 try {
-                    const subjectDetail = await fetchJson(bangumiApi.getSubject(episodeInfo.bgmSubjectId));
+                    const subjectDetail = await fetchJson(bangumiApi.getSubject(episodeInfo.bgmSubjectId), fetchOpts);
                     bangumiInfoLs = {
                         ...(bangumiInfoLs || {}),
                         subjectName: subjectDetail?.name || '',
@@ -2615,14 +2632,14 @@
             if (triedSubjectIds.has(hintedSubjectId)) { continue; }
             triedSubjectIds.add(hintedSubjectId);
             try {
-                return await resolveBangumiRelBySubjectId(hintedSubjectId, episodeInfo, bangumiInfoLs);
+                return await resolveBangumiRelBySubjectId(hintedSubjectId, episodeInfo, bangumiInfoLs, fetchOpts);
             } catch (error) {
                 logger.warn(`[Bangumi映射] 复用 subjectId ${hintedSubjectId} 失败，准备继续搜索`, error.message || error);
             }
         }
 
-        const bangumiSubject = await findBangumiSubjectBySearch(episodeInfo);
-        return resolveBangumiRelBySubjectId(bangumiSubject.id, episodeInfo, bangumiInfoLs);
+        const bangumiSubject = await findBangumiSubjectBySearch(episodeInfo, fetchOpts);
+        return resolveBangumiRelBySubjectId(bangumiSubject.id, episodeInfo, bangumiInfoLs, fetchOpts);
     }
 
     async function getCurrentEpisodeUrl() {
@@ -2663,8 +2680,9 @@
         }
     }
 
-    async function putBangumiEpStatus(token) {
-        const bangumiInfo = await getEpisodeBangumiRel();
+    async function putBangumiEpStatus(token, opts = {}) {
+        const fetchOpts = opts.fetchOpts || {};
+        const bangumiInfo = await getEpisodeBangumiRel(opts.episodeInfo, fetchOpts);
         const { subjectId, bgmEpisodeId, } = bangumiInfo;
         if (!bgmEpisodeId) {
             throw new Error('未匹配到 Bangumi 章节 ID');
@@ -2674,10 +2692,10 @@
         if (bangumiMe) {
             bangumiMe = JSON.parse(bangumiMe);
         } else {
-            bangumiMe = await fetchBangumiApiGetMe(token);
+            bangumiMe = await fetchBangumiApiGetMe(token, fetchOpts);
         }
         let msg = '';
-        const bangumiUserColl = await fetchJson(bangumiApi.getUserCollection(bangumiMe.username, subjectId), { token });
+        const bangumiUserColl = await fetchJson(bangumiApi.getUserCollection(bangumiMe.username, subjectId), { ...fetchOpts, token });
         if (bangumiUserColl.type === 2) { // 看过状态
             msg = 'Bangumi 条目已为看过状态,跳过更新';
             logger.debug(msg, bangumiUserColl);
@@ -2685,10 +2703,10 @@
         }
         logger.debug('准备修改 Bangumi 条目收藏状态为在看, 如果不存在则创建, 如果存在则修改');
         let body = { type: 3 }; // 在看状态
-        await fetchJson(bangumiApi.postUserCollection(subjectId), { token, body });
+        await fetchJson(bangumiApi.postUserCollection(subjectId), { ...fetchOpts, token, body });
         if (!bangumiInfo.bangumiEpsRes) {
             const fetchUrl = bangumiApi.getUserSubjectEpisodeCollection(subjectId);
-            bangumiInfo.bangumiEpsRes = await fetchJson(fetchUrl, { token });
+            bangumiInfo.bangumiEpsRes = await fetchJson(fetchUrl, { ...fetchOpts, token });
         }
         const bangumiEpColl = Array.isArray(bangumiInfo.bangumiEpsRes?.data)
             ? bangumiInfo.bangumiEpsRes.data.find(item => item?.episode?.id === bgmEpisodeId)
@@ -2702,7 +2720,7 @@
         }
         logger.debug('准备更新 Bangumi 章节收藏状态, 详情: ', bangumiEp);
         body.type = 2; // 看过状态
-        await fetchJson(bangumiApi.putUserEpisodeCollection(bangumiEp.id), { token, body, method: 'PUT' });
+        await fetchJson(bangumiApi.putUserEpisodeCollection(bangumiEp.id), { ...fetchOpts, token, body, method: 'PUT' });
         bangumiEp.type = body.type;
         logger.info(`成功更新 Bangumi 章节收藏状态, 在看 => 看过, 详情: `, bangumiEp);
         window.ede.bangumiInfo = bangumiInfo;
@@ -2712,20 +2730,22 @@
 
     async function fetchJson(url, opts = {}) {
     const { token, headers, body, timeoutMs = 30000 } = opts;
+    const abortOnDestroy = opts.abortOnDestroy !== false;
     let { method = 'GET' } = opts;
     if (method === 'GET' && body) method = 'POST';
 
-    // 判断是否为弹弹play 或 Bangumi 官方 API，用于决定是否发送 X-User-Agent
+    // 判断是否为弹弹play API，用于决定是否发送 X-User-Agent
     const isDandanplayApi = url.includes('api.dandanplay.net') || url.includes('dandanplay');
-    const isBangumiApi = url.includes('api.bgm.tv') || url.includes('bgm.tv');
-    const shouldSendUserAgent = isDandanplayApi || isBangumiApi;
+    const shouldSendUserAgent = isDandanplayApi;
 
     const requestHeaders = {
         'Accept-Encoding': 'gzip',
         'Accept': 'application/json',
-        'Content-Type': 'application/json',
     };
-    // 只有弹弹play和Bangumi官方API才发送 X-User-Agent
+    if (body) {
+        requestHeaders['Content-Type'] = 'application/json';
+    }
+    // Bangumi 官方 API 的 CORS 预检不允许 X-User-Agent，浏览器会发送原生 User-Agent。
     if (shouldSendUserAgent) {
         requestHeaders['X-User-Agent'] = userAgent;
     }
@@ -2740,7 +2760,7 @@
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs); // 30s 超时
 
     // 将控制器注册到全局集合，便于销毁时统一取消
-    if (window.ede?.abortControllers) {
+    if (abortOnDestroy && window.ede?.abortControllers) {
         window.ede.abortControllers.add(controller);
     }
 
@@ -2854,7 +2874,7 @@
         throw error;
     } finally {
         // 请求结束（无论成功失败），从集合中移除控制器
-        if (window.ede?.abortControllers) {
+        if (abortOnDestroy && window.ede?.abortControllers) {
             window.ede.abortControllers.delete(controller);
         }
     }
@@ -3732,16 +3752,19 @@
 
             let predictedEpisodeId = null;
             let direction = '';
+            let bgmIndexDelta = 0;
 
             // 播放下一集 (e.g., from ep1(index 0) to ep2(number 2))
             if (currentEpisodeNumber === previousEpisodeIndex + 2) {
                 predictedEpisodeId = previousEpisodeId + 1;
                 direction = '下一集';
+                bgmIndexDelta = 1;
             }
             // 播放上一集 (e.g., from ep2(index 1) to ep1(number 1))
             else if (currentEpisodeNumber === previousEpisodeIndex) {
                 predictedEpisodeId = previousEpisodeId - 1;
                 direction = '上一集';
+                bgmIndexDelta = -1;
             }
 
             if (predictedEpisodeId) {
@@ -3753,6 +3776,8 @@
                 const comments = await fetchComment(predictedEpisodeId, prevApiPrefix);
                 if (comments && comments.length > 0) {
                     logger.info(`[推理匹配] 成功！episodeId: ${predictedEpisodeId}，弹幕数: ${comments.length}，源: ${prevApiName || '默认'}`);
+                    const predictedEpisodeIndex = isNaN(currentEpisodeNumber) ? 0 : currentEpisodeNumber - 1;
+                    const predictedBgmEpisodeIndex = deriveBgmEpisodeIndex(previous_info, predictedEpisodeIndex, bgmIndexDelta);
                     const predictedEpisodeInfo = {
                         ...itemInfoMap,
                         episodeId: predictedEpisodeId,
@@ -3762,10 +3787,11 @@
                         animeTitle: previous_info.animeTitle,
                         imageUrl: previous_info.imageUrl,
                         seriesOrMovieId: seriesOrMovieId,
-                        episodeIndex: currentEpisodeNumber - 1,
+                        episodeIndex: predictedEpisodeIndex,
                         bangumiIdHint: previous_info.bangumiIdHint || null,
                         bgmSubjectId: previous_info.bgmSubjectId || null,
                         bgmEpisodeId: null,
+                        bgmEpisodeIndex: predictedBgmEpisodeIndex,
                         // [修复] 携带源信息，确保后续 fetchComment 和下次推理都使用同一个源
                         apiPrefix: prevApiPrefix,
                         apiName: prevApiName,
@@ -3931,7 +3957,7 @@
             episode: episode,
             episodeTitle: targetEpisode.episodeTitle,
             episodeIndex,
-            bgmEpisodeIndex: res.bgmEpisodeIndex ? res.bgmEpisodeIndex : episodeIndex,
+            bgmEpisodeIndex: deriveBgmEpisodeIndex({ bgmEpisodeIndex: res.bgmEpisodeIndex }, episodeIndex),
             animeId: animaInfo.animes[selectAnime_id].animeId,
             animeTitle: animaInfo.animes[selectAnime_id].animeTitle,
             animeOriginalTitle,
@@ -7888,9 +7914,9 @@
         });
     }
 
-    async function fetchBangumiApiGetMe(bangumiToken) {
+    async function fetchBangumiApiGetMe(bangumiToken, fetchOpts = {}) {
         try {
-            const res = await fetchJson(bangumiApi.getMe(), { token: bangumiToken });
+            const res = await fetchJson(bangumiApi.getMe(), { ...fetchOpts, token: bangumiToken });
             logger.debug('Bangumi Token 验证成功', res);
             localStorage.setItem(lsLocalKeys.bangumiMe, JSON.stringify(res));
             return res;
@@ -10591,7 +10617,7 @@
 
         // [备份逻辑] 智能推断需要这个，必须放在清空前
         if (window.ede && window.ede.episode_info) {
-            window.ede.previous_episode_info = window.ede.episode_info;
+            window.ede.previous_episode_info = { ...window.ede.episode_info };
         }
 
         // =========== [UI 瞬间清空区] ===========

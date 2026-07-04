@@ -1,8 +1,8 @@
 基于 [l429609201/dd-danmaku](https://github.com/l429609201/dd-danmaku) 的个人魔改版本
 
-增加了 Bangumi 角色介绍功能
+增加了 Bangumi 角色介绍和制作评分功能
 
-![Bangumi角色介绍](https://raw.githubusercontent.com/ikemenrourou/dd-danmaku/main/images/bangumi-feature.png)
+![Bangumi功能展示](https://raw.githubusercontent.com/ikemenrourou/dd-danmaku/main/images/bangumi-feature.png)
 
 ---
 

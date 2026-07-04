@@ -82,9 +82,12 @@
         getEpisodes: (subjectId) => `${bangumiApi.prefix}/episodes?subject_id=${subjectId}&type=0`,
         getEpisodeById: (episodeId) => `${bangumiApi.prefix}/episodes/${episodeId}`,
         getCharacters: (subjectId) => `${bangumiApi.prefix}/subjects/${subjectId}/characters`,
+        getSubjectPersons: (subjectId) => `${bangumiApi.prefix}/subjects/${subjectId}/persons`,
         getCharacter: (characterId) => `${bangumiApi.prefix}/characters/${characterId}`,
         getPerson: (personId) => `${bangumiApi.prefix}/persons/${personId}`,
         getPersonCharacters: (personId) => `${bangumiApi.prefix}/persons/${personId}/characters`,
+        getPersonSubjects: (personId) => `${bangumiApi.prefix}/persons/${personId}/subjects`,
+        getPersonComments: (personId) => `https://next.bgm.tv/p1/persons/${personId}/comments`,
         // need auth
         getMe: () => `${bangumiApi.prefix}/me`,
         getUserCollection: (userName, subjectId) => `${bangumiApi.prefix}/users/${userName}/collections/${subjectId}`,
@@ -553,6 +556,7 @@
         episodeDialog: 'episodeDialog',
         episodeIframe: 'episodeIframe',
         charactersDialog: 'charactersDialog',
+        productionScoreDialog: 'productionScoreDialog',
         antiOverlapBtn: 'antiOverlapBtn',
         antiOverlapDiv: 'antiOverlapDiv',
         excludedLibrariesDiv: 'excludedLibrariesDiv',
@@ -573,6 +577,7 @@
         { label: '弹幕设置', iconKey: iconKeys.setting, onClick: createDialog },
         { label: '章节信息', iconKey: iconKeys.info, onClick: showEpisodeDialog },
         { label: '角色介绍', iconKey: iconKeys.person, onClick: showCharactersInfo },
+        { label: '制作评分', iconKey: iconKeys.sentiment_very_satisfied, onClick: showProductionScore },
     ];
     const customeUrlMsg1 = '限弹弹 play API 兼容结构';
     const customeUrl = {
@@ -6206,6 +6211,1366 @@
                 'text-align: center',
             ].join(';');
             container.append(fallback);
+        }
+    }
+
+    async function showProductionScore(event) {
+        const DAY_MS = 24 * 60 * 60 * 1000;
+        const BASE_SCORE = 6.8;
+        const TRUST_GATE = 300;
+        const MIN_RATING_TOTAL = 30;
+        const MIN_VALID_WORKS = 2;
+        const MAX_WORKS_PER_PERSON = 40;
+        const MAX_SUBJECT_DETAIL_FETCHES = 160;
+        const PERSON_SUBJECTS_TTL = 14 * DAY_MS;
+        const PERSON_DETAIL_TTL = 30 * DAY_MS;
+        const PERSON_COMMENTS_TTL = 6 * 60 * 60 * 1000;
+        const SUBJECT_DETAIL_TTL = 30 * DAY_MS;
+        const CACHE_PREFIX = 'ede_production_score_v4_';
+        let bangumiInfo = null;
+        let sections = [];
+        let rows = [];
+        let selectedRow = null;
+        let detailPane = null;
+        let rowElements = new Map();
+        let subjectDetailBudget = MAX_SUBJECT_DETAIL_FETCHES;
+        let personDetailRequests = new Map();
+        let personCommentRequests = new Map();
+
+        const roleGroups = [
+            { id: 'animation', label: '动画制作', currentWeight: matchAnimationProduction, historyWeight: matchAnimationProduction },
+            { id: 'director', label: '监督 / 导演', currentWeight: matchDirectorRole, historyWeight: matchDirectorHistory },
+            { id: 'series', label: '系列构成', currentWeight: matchSeriesRole, historyWeight: matchSeriesHistory },
+            { id: 'script', label: '脚本', currentWeight: matchScriptRole, historyWeight: matchScriptHistory },
+            { id: 'original', label: '原作 / 人物原案', currentWeight: matchOriginalRole, historyWeight: matchOriginalHistory },
+            { id: 'characterDesign', label: '人物设定', currentWeight: matchCharacterDesignRole, historyWeight: matchCharacterDesignHistory },
+            { id: 'chiefAnimationDirector', label: '总作画监督', currentWeight: matchChiefAnimationDirectorRole, historyWeight: matchChiefAnimationDirectorHistory },
+            { id: 'animationProducer', label: '动画制片人', currentWeight: matchAnimationProducerRole, historyWeight: matchAnimationProducerHistory },
+            { id: 'oped', label: 'OP / ED', currentWeight: matchOpEdRole, historyWeight: matchOpEdHistory },
+        ];
+
+        try {
+            const existingDialog = getById(eleIds.productionScoreDialog);
+            if (existingDialog) {
+                existingDialog.remove();
+                return;
+            }
+
+            bangumiInfo = await getEpisodeBangumiRel();
+            const persons = await getSubjectPersonsCached(bangumiInfo.subjectId);
+            sections = buildCoreStaffSections(persons);
+            rows = sections.flatMap(section => section.rows);
+            if (rows.length < 1) {
+                embyAlert({ text: '没有可评分的核心制作人员' });
+                return;
+            }
+
+            const dialog = document.createElement('div');
+            dialog.id = eleIds.productionScoreDialog;
+            dialog.style.cssText = [
+                'position: fixed',
+                'bottom: 13vh',
+                'left: 3.4vw',
+                'right: 3.4vw',
+                'height: 35vh',
+                'min-height: 286px',
+                'max-height: 356px',
+                'display: flex',
+                'flex-direction: row-reverse',
+                'overflow: hidden',
+                'z-index: 1001',
+                'border-radius: 10px',
+                'border: 0',
+                'background: linear-gradient(90deg, rgba(31, 32, 34, 0.50), rgba(20, 22, 24, 0.42))',
+                'box-shadow: inset 0 1px 0 rgba(255,255,255,0.12), inset 0 -1px 0 rgba(0,0,0,0.24), 0 18px 58px rgba(0, 0, 0, 0.28)',
+                'backdrop-filter: blur(32px) saturate(135%)',
+                '-webkit-backdrop-filter: blur(32px) saturate(135%)',
+            ].join(';');
+
+            const localStyle = document.createElement('style');
+            localStyle.textContent = `
+                #${eleIds.productionScoreDialog} .ede-production-score-scroll::-webkit-scrollbar { display: none; }
+                #${eleIds.productionScoreDialog} button:focus { outline: none; }
+            `;
+            dialog.append(localStyle);
+
+            const listPane = document.createElement('div');
+            listPane.style.cssText = [
+                'width: 30%',
+                'min-width: 390px',
+                'max-width: 520px',
+                'flex: none',
+                'padding: 0.62em 0.7em 0.62em',
+                'box-sizing: border-box',
+                'display: flex',
+                'flex-direction: column',
+                'overflow: hidden',
+            ].join(';');
+            dialog.append(listPane);
+
+            const header = document.createElement('div');
+            header.style.cssText = [
+                'height: 1.55em',
+                'display: flex',
+                'align-items: center',
+                'justify-content: space-between',
+                'gap: 0.8em',
+                'margin-bottom: 0.28em',
+            ].join(';');
+            const title = document.createElement('div');
+            title.textContent = bangumiInfo?.subjectName || '制作评分';
+            title.style.cssText = [
+                'min-width: 0',
+                'flex: 1',
+                'color: rgba(255,255,255,0.88)',
+                'font-size: 0.82em',
+                'font-weight: 760',
+                'white-space: nowrap',
+                'overflow: hidden',
+                'text-overflow: ellipsis',
+            ].join(';');
+            const closeButton = document.createElement('button');
+            closeButton.textContent = '×';
+            closeButton.title = '关闭';
+            closeButton.style.cssText = [
+                'width: 2em',
+                'height: 2em',
+                'padding: 0',
+                'border: 0',
+                'border-radius: 50%',
+                'background: rgba(255,255,255,0.12)',
+                'color: #fff',
+                'font-size: 1.2em',
+                'line-height: 1',
+                'cursor: pointer',
+            ].join(';');
+            closeButton.onclick = () => dialog.remove();
+            header.append(title, closeButton);
+            listPane.append(header);
+
+            const listScroll = document.createElement('div');
+            listScroll.className = 'ede-production-score-scroll';
+            listScroll.style.cssText = [
+                'flex: 1',
+                'min-height: 0',
+                'overflow-y: auto',
+                'overflow-x: hidden',
+                'scrollbar-width: none',
+                '-ms-overflow-style: none',
+                'padding-right: 0.16em',
+                'display: grid',
+                'grid-template-columns: minmax(0, 1fr)',
+                'align-content: start',
+            ].join(';');
+            listPane.append(listScroll);
+
+            sections.forEach(section => renderSection(listScroll, section));
+
+            const divider = document.createElement('div');
+            divider.style.cssText = [
+                'width: 1px',
+                'align-self: stretch',
+                'margin: 1.15em 0',
+                'background: linear-gradient(to bottom, rgba(255,255,255,0), rgba(255,255,255,0.18) 22%, rgba(255,255,255,0.18) 78%, rgba(255,255,255,0))',
+            ].join(';');
+            dialog.append(divider);
+
+            detailPane = document.createElement('div');
+            detailPane.style.cssText = [
+                'flex: 1',
+                'min-width: 0',
+                'padding: 0.72em 0.86em',
+                'box-sizing: border-box',
+                'display: flex',
+                'flex-direction: column',
+                'overflow: hidden',
+            ].join(';');
+            dialog.append(detailPane);
+
+            document.body.append(dialog);
+            closeFloatingDialogOnOutsideClick(dialog, event);
+            selectRow(rows[0]);
+            runRowAnalysis(dialog);
+        } catch (error) {
+            logger.error('显示制作评分失败:', error);
+            embyAlert({ text: '显示制作评分失败: ' + error.message });
+        }
+
+        function normalizeRole(role) {
+            return String(role || '')
+                .replace(/\s+/g, '')
+                .replace(/[：:]/g, '')
+                .toLowerCase();
+        }
+
+        function roleIncludes(role, words) {
+            const text = normalizeRole(role);
+            return (Array.isArray(words) ? words : [words]).some(word => text.includes(normalizeRole(word)));
+        }
+
+        function roleIncludesAny(role, words) {
+            return words.some(word => roleIncludes(role, word));
+        }
+
+        function roleHasAnyForbidden(role, words) {
+            return roleIncludesAny(role, words);
+        }
+
+        function matchAnimationProduction(role) {
+            if (!roleIncludesAny(role, ['动画制作', 'アニメーション制作', 'animationproduction'])) { return 0; }
+            if (roleHasAnyForbidden(role, ['制作协力', '制作協力', '动画制作协力', '动画協力', '协力', '協力', '製作', '制作委员会', '製作委员会', '委员会', '委員会'])) { return 0; }
+            return 1;
+        }
+
+        function matchDirectorRole(role) {
+            if (!roleIncludesAny(role, ['导演', '監督', '监督', '総監督', '总监督'])) { return 0; }
+            if (roleHasAnyForbidden(role, ['音响监督', '音響監督', '摄影监督', '撮影監督', '美术监督', '美術監督', '作画监督', '作画監督', '总作画监督', '総作画監督', 'cg监督', 'cg导演', '3d监督', '3d导演'])) { return 0; }
+            return 1;
+        }
+
+        function matchDirectorHistory(role) {
+            if (matchDirectorRole(role)) { return 1; }
+            if (roleIncludesAny(role, ['演出', '分镜', '絵コンテ', 'コンテ'])) { return 0.45; }
+            return 0;
+        }
+
+        function matchSeriesRole(role) {
+            return roleIncludesAny(role, ['系列构成', 'シリーズ構成']) ? 1 : 0;
+        }
+
+        function matchSeriesHistory(role) {
+            if (matchSeriesRole(role)) { return 1; }
+            return matchScriptRole(role) ? 0.65 : 0;
+        }
+
+        function matchScriptRole(role) {
+            return roleIncludesAny(role, ['脚本', '剧本', 'シナリオ']) ? 1 : 0;
+        }
+
+        function matchScriptHistory(role) {
+            if (matchScriptRole(role)) { return 1; }
+            return matchSeriesRole(role) ? 0.65 : 0;
+        }
+
+        function matchOriginalRole(role) {
+            return roleIncludesAny(role, ['原作', '人物原案', '角色原案', 'キャラクター原案', '原案']) ? 1 : 0;
+        }
+
+        function matchOriginalHistory(role) {
+            if (matchOriginalRole(role)) { return 1; }
+            return roleIncludesAny(role, ['插图', '插畫', 'イラスト']) ? 0.35 : 0;
+        }
+
+        function matchCharacterDesignRole(role) {
+            return roleIncludesAny(role, ['人物设定', '人物設定', '角色设计', '角色設計', 'キャラクターデザイン', 'characterdesign']) ? 1 : 0;
+        }
+
+        function matchCharacterDesignHistory(role) {
+            if (matchCharacterDesignRole(role)) { return 1; }
+            if (matchChiefAnimationDirectorRole(role)) { return 0.55; }
+            return roleIncludesAny(role, ['作画监督', '作画監督']) ? 0.35 : 0;
+        }
+
+        function matchChiefAnimationDirectorRole(role) {
+            return roleIncludesAny(role, ['总作画监督', '總作画監督', '総作画監督', 'chiefanimationdirector']) ? 1 : 0;
+        }
+
+        function matchChiefAnimationDirectorHistory(role) {
+            if (matchChiefAnimationDirectorRole(role)) { return 1; }
+            return roleIncludesAny(role, ['作画监督', '作画監督']) ? 0.45 : 0;
+        }
+
+        function matchAnimationProducerRole(role) {
+            return roleIncludesAny(role, ['动画制片人', '动画制片', 'アニメーションプロデューサー']) ? 1 : 0;
+        }
+
+        function matchAnimationProducerHistory(role) {
+            if (matchAnimationProducerRole(role)) { return 1; }
+            if (roleIncludesAny(role, ['制片人', 'プロデューサー']) && !roleIncludesAny(role, ['执行制片', '制作人'])) { return 0.45; }
+            return 0;
+        }
+
+        function matchOpEdRole(role) {
+            const hasOpEd = roleIncludesAny(role, ['op', 'ed', 'opening', 'ending', 'オープニング', 'エンディング']);
+            const hasCraft = roleIncludesAny(role, ['演出', '分镜', '絵コンテ', 'コンテ', '导演', '監督', '监督']);
+            return hasOpEd && hasCraft ? 1 : 0;
+        }
+
+        function matchOpEdHistory(role) {
+            return matchOpEdRole(role);
+        }
+
+        function buildCoreStaffSections(persons) {
+            const safePersons = Array.isArray(persons) ? persons : [];
+            return roleGroups.map(group => {
+                const byId = new Map();
+                safePersons.forEach(person => {
+                    const relation = person?.relation || '';
+                    if (!person?.id || !group.currentWeight(relation)) { return; }
+                    const key = String(person.id);
+                    const existing = byId.get(key);
+                    if (existing) {
+                        existing.relations = uniqueTextList([...existing.relations, relation]);
+                    } else {
+                        byId.set(key, {
+                            id: `${group.id}_${person.id}`,
+                            group,
+                            person,
+                            relations: [relation],
+                            analysis: null,
+                            status: 'pending',
+                        });
+                    }
+                });
+                return {
+                    group,
+                    rows: Array.from(byId.values()).sort((a, b) => getCurrentRolePriority(group, a) - getCurrentRolePriority(group, b)),
+                };
+            });
+        }
+
+        function getCurrentRolePriority(group, row) {
+            const relations = row?.relations || [];
+            if (group?.id === 'director') {
+                if (relations.some(role => roleIncludesAny(role, ['副监督', '副監督', '助监督', '助監督']))) { return 1; }
+                return 0;
+            }
+            return 0;
+        }
+
+        function uniqueTextList(list) {
+            const seen = new Set();
+            return (Array.isArray(list) ? list : []).filter(item => {
+                const text = String(item || '').trim();
+                if (!text || seen.has(text)) { return false; }
+                seen.add(text);
+                return true;
+            });
+        }
+
+        function renderSection(container, section) {
+            const groupWrap = document.createElement('div');
+            groupWrap.style.cssText = 'margin-bottom: 0.42em;';
+            const heading = document.createElement('div');
+            heading.textContent = section.group.label;
+            heading.style.cssText = [
+                'margin: 0.08em 0 0.18em',
+                'color: rgba(255,255,255,0.56)',
+                'font-size: 0.62em',
+                'font-weight: 760',
+                'letter-spacing: 0',
+            ].join(';');
+            groupWrap.append(heading);
+
+            if (section.rows.length < 1) {
+                const empty = document.createElement('div');
+                empty.textContent = '—';
+                empty.style.cssText = [
+                    'height: 1.86em',
+                    'display: flex',
+                    'align-items: center',
+                    'padding: 0 0.54em',
+                    'border-radius: 7px',
+                    'color: rgba(255,255,255,0.36)',
+                    'background: rgba(255,255,255,0.045)',
+                    'font-size: 0.70em',
+                ].join(';');
+                groupWrap.append(empty);
+            } else {
+                section.rows.forEach(row => groupWrap.append(renderRowButton(row)));
+            }
+            container.append(groupWrap);
+        }
+
+        function renderRowButton(row) {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.dataset.rowId = row.id;
+            button.style.cssText = [
+                'width: 100%',
+                'height: 3.08em',
+                'margin-bottom: 0.18em',
+                'padding: 0.28em 0.54em',
+                'display: grid',
+                'grid-template-columns: 34px minmax(0, 1fr) auto',
+                'align-items: center',
+                'gap: 0.52em',
+                'border: 0',
+                'border-radius: 7px',
+                'background: rgba(255,255,255,0.075)',
+                'color: #fff',
+                'cursor: pointer',
+                'text-align: left',
+                'box-shadow: inset 0 0 0 1px rgba(255,255,255,0.045)',
+            ].join(';');
+            button.onclick = () => selectRow(row);
+
+            const avatar = document.createElement('div');
+            avatar.dataset.role = 'avatar';
+            avatar.style.cssText = [
+                'width: 34px',
+                'height: 34px',
+                'border-radius: 7px',
+                'overflow: hidden',
+                'background: rgba(255,255,255,0.08)',
+                'box-shadow: inset 0 0 0 1px rgba(255,255,255,0.08)',
+            ].join(';');
+            renderPersonThumb(avatar, row.person, 'small');
+            button.append(avatar);
+
+            const textWrap = document.createElement('div');
+            textWrap.style.cssText = 'min-width: 0;';
+            const name = document.createElement('div');
+            name.dataset.role = 'name';
+            name.textContent = getPersonDisplayName(row.person);
+            name.style.cssText = [
+                'min-width: 0',
+                'font-size: 0.72em',
+                'font-weight: 720',
+                'white-space: nowrap',
+                'overflow: hidden',
+                'text-overflow: ellipsis',
+            ].join(';');
+            const relation = document.createElement('div');
+            relation.textContent = row.relations.join(' / ');
+            relation.style.cssText = [
+                'margin-top: 0.18em',
+                'color: rgba(255,255,255,0.46)',
+                'font-size: 0.58em',
+                'line-height: 1.12',
+                'white-space: nowrap',
+                'overflow: hidden',
+                'text-overflow: ellipsis',
+            ].join(';');
+            textWrap.append(name, relation);
+            button.append(textWrap);
+
+            const score = document.createElement('div');
+            score.dataset.role = 'score';
+            score.textContent = '...';
+            score.style.cssText = [
+                'min-width: 2.8em',
+                'height: 1.62em',
+                'display: inline-flex',
+                'align-items: center',
+                'justify-content: center',
+                'padding: 0 0.34em',
+                'border-radius: 7px',
+                'background: rgba(255,255,255,0.11)',
+                'box-shadow: inset 0 0 0 1px rgba(255,255,255,0.18), 0 5px 14px rgba(0,0,0,0.18)',
+                'text-align: right',
+                'font-size: 0.86em',
+                'font-weight: 800',
+                'font-variant-numeric: tabular-nums',
+                'color: rgba(255,255,255,0.54)',
+            ].join(';');
+            button.append(score);
+            rowElements.set(row.id, button);
+            return button;
+        }
+
+        function selectRow(row) {
+            selectedRow = row;
+            rowElements.forEach((button, id) => {
+                const selected = id === row.id;
+                button.style.background = selected ? 'rgba(255,255,255,0.16)' : 'rgba(255,255,255,0.075)';
+                button.style.boxShadow = selected
+                    ? 'inset 0 0 0 1px rgba(255,255,255,0.22), 0 8px 22px rgba(0,0,0,0.18)'
+                    : 'inset 0 0 0 1px rgba(255,255,255,0.045)';
+            });
+            if (!Array.isArray(row.comments)) { row.commentsLoading = true; }
+            renderDetail(row);
+            Promise.all([
+                ensurePersonDetail(row),
+                ensurePersonComments(row),
+            ]).then(() => {
+                updateRowIdentity(row);
+                if (selectedRow?.id === row.id) { renderDetail(row); }
+            });
+        }
+
+        function updateRowIdentity(row) {
+            const button = rowElements.get(row.id);
+            if (!button) { return; }
+            const avatar = button.querySelector('[data-role="avatar"]');
+            const name = button.querySelector('[data-role="name"]');
+            if (avatar) { renderPersonThumb(avatar, row.person, 'small'); }
+            if (name) { name.textContent = getPersonDisplayName(row.person); }
+        }
+
+        function updateRow(row) {
+            const button = rowElements.get(row.id);
+            if (!button) { return; }
+            const score = button.querySelector('[data-role="score"]');
+            if (!score) { return; }
+            if (row.status === 'loading') {
+                score.textContent = '...';
+                score.style.color = 'rgba(255,255,255,0.54)';
+                score.style.boxShadow = 'inset 0 0 0 1px rgba(255,255,255,0.18), 0 5px 14px rgba(0,0,0,0.18)';
+                score.style.textShadow = 'none';
+                return;
+            }
+            if (!row.analysis?.score) {
+                score.textContent = '—';
+                score.style.color = 'rgba(255,255,255,0.42)';
+                score.style.boxShadow = 'inset 0 0 0 1px rgba(255,255,255,0.14), 0 5px 14px rgba(0,0,0,0.16)';
+                score.style.textShadow = 'none';
+                return;
+            }
+            score.textContent = row.analysis.score.toFixed(1);
+            score.style.color = getScoreColor(row.analysis.score);
+            score.style.boxShadow = 'inset 0 0 0 1px rgba(255,255,255,0.22), 0 5px 14px rgba(0,0,0,0.20)';
+            score.style.textShadow = '0 1px 2px rgba(0,0,0,0.52)';
+        }
+
+        function renderDetail(row) {
+            if (!detailPane) { return; }
+            detailPane.innerHTML = '';
+
+            const header = document.createElement('div');
+            header.style.cssText = [
+                'display: flex',
+                'align-items: center',
+                'justify-content: space-between',
+                'gap: 0.8em',
+                'margin-bottom: 0.44em',
+            ].join(';');
+
+            const profile = document.createElement('div');
+            profile.style.cssText = [
+                'min-width: 0',
+                'flex: 1',
+                'display: flex',
+                'align-items: center',
+                'gap: 0.62em',
+            ].join(';');
+            const avatar = document.createElement('div');
+            avatar.style.cssText = [
+                'width: 68px',
+                'height: 68px',
+                'min-width: 68px',
+                'border-radius: 8px',
+                'overflow: hidden',
+                'background: rgba(255,255,255,0.08)',
+                'box-shadow: inset 0 0 0 1px rgba(255,255,255,0.10), 0 10px 26px rgba(0,0,0,0.20)',
+            ].join(';');
+            renderPersonThumb(avatar, row.person, 'medium');
+            profile.append(avatar);
+
+            const identity = document.createElement('div');
+            identity.style.cssText = 'min-width: 0; flex: 1;';
+            const name = document.createElement('div');
+            name.textContent = getPersonDisplayName(row.person);
+            name.style.cssText = [
+                'margin-top: 0',
+                'color: #fff',
+                'font-size: 1.16em',
+                'font-weight: 820',
+                'line-height: 1.16',
+                'white-space: nowrap',
+                'overflow: hidden',
+                'text-overflow: ellipsis',
+            ].join(';');
+            const relation = document.createElement('div');
+            relation.textContent = row.relations.join(' / ');
+            relation.style.cssText = 'margin-top: 0.24em; color: rgba(255,255,255,0.68); font-size: 0.68em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;';
+            identity.append(name, relation);
+            profile.append(identity);
+            header.append(profile);
+
+            const metrics = document.createElement('div');
+            metrics.style.cssText = [
+                'min-width: 0',
+                'display: flex',
+                'align-items: center',
+                'justify-content: flex-end',
+                'gap: 0.52em',
+                'max-width: 50%',
+            ].join(';');
+
+            const meta = document.createElement('div');
+            const analysis = row.analysis;
+            const metaText = analysis
+                ? `翻车概率 ${formatAccidentRate(analysis)} · 近作 ${formatScore(analysis.recentScore)} · 样本 ${analysis.validCount}`
+                : (row.status === 'loading' ? '正在统计历史作品...' : '等待统计');
+            meta.textContent = metaText;
+            meta.style.cssText = [
+                'margin-top: 0',
+                'height: 1.8em',
+                'display: inline-flex',
+                'align-items: center',
+                'max-width: 100%',
+                'padding: 0 0.62em',
+                'border-radius: 7px',
+                'background: rgba(0,0,0,0.20)',
+                'box-shadow: inset 0 0 0 1px rgba(255,255,255,0.055)',
+                'color: rgba(255,255,255,0.70)',
+                'font-size: 0.66em',
+                'box-sizing: border-box',
+                'white-space: nowrap',
+                'overflow: hidden',
+                'text-overflow: ellipsis',
+            ].join(';');
+
+            const score = document.createElement('button');
+            score.type = 'button';
+            score.title = '打开 Bangumi 人物页';
+            score.onclick = () => window.open(`https://bgm.tv/person/${row.person.id}`, '_blank');
+            const hasScore = !!row.analysis?.score;
+            score.textContent = hasScore ? row.analysis.score.toFixed(1) : (row.status === 'loading' ? '...' : '—');
+            score.style.cssText = [
+                'justify-self: end',
+                'align-self: center',
+                'width: 4.2em',
+                'height: 2.12em',
+                'margin-top: 0',
+                'border: 0',
+                'border-radius: 9px',
+                'background: rgba(255,255,255,0.12)',
+                'backdrop-filter: blur(18px) saturate(135%)',
+                '-webkit-backdrop-filter: blur(18px) saturate(135%)',
+                'box-shadow: inset 0 0 0 1px rgba(255,255,255,0.22), 0 8px 22px rgba(0,0,0,0.20)',
+                `color: ${hasScore ? getScoreColor(row.analysis.score) : 'rgba(255,255,255,0.54)'}`,
+                'font-size: 1.08em',
+                'font-weight: 800',
+                'font-variant-numeric: tabular-nums',
+                'cursor: pointer',
+                `text-shadow: ${hasScore ? '0 1px 2px rgba(0,0,0,0.52)' : 'none'}`,
+            ].join(';');
+            metrics.append(score, meta);
+            header.append(metrics);
+            detailPane.append(header);
+
+            const summary = document.createElement('div');
+            summary.style.cssText = [
+                'height: 3.15em',
+                'min-height: 3.15em',
+                'padding: 0.42em 0.66em',
+                'box-sizing: border-box',
+                'border-radius: 8px',
+                'background: rgba(0,0,0,0.12)',
+                'box-shadow: inset 0 0 0 1px rgba(255,255,255,0.045)',
+                'overflow: hidden',
+                'color: rgba(255,255,255,0.78)',
+                'font-size: 0.66em',
+                'line-height: 1.38',
+                'display: -webkit-box',
+                '-webkit-line-clamp: 2',
+                '-webkit-box-orient: vertical',
+                'text-shadow: 0 1px 4px rgba(0,0,0,0.55)',
+            ].join(';');
+            const summaryLabel = document.createElement('span');
+            summaryLabel.textContent = '介绍：';
+            summaryLabel.style.cssText = 'color: rgba(255,255,255,0.52); font-weight: 720;';
+            const summaryText = document.createElement('span');
+            summaryText.textContent = getPersonSummary(row);
+            summary.append(summaryLabel, summaryText);
+            detailPane.append(summary);
+
+            const mediaRow = document.createElement('div');
+            mediaRow.style.cssText = [
+                'flex: 1',
+                'min-height: 0',
+                'margin-top: 0.48em',
+                'display: flex',
+                'gap: 0.9em',
+                'overflow: hidden',
+            ].join(';');
+
+            const worksWrap = document.createElement('div');
+            worksWrap.style.cssText = [
+                'height: 100%',
+                'min-height: 0',
+                'width: 58%',
+                'max-width: 58%',
+                'display: flex',
+                'gap: 0.46em',
+                'overflow: hidden',
+                'flex: none',
+            ].join(';');
+            const works = Array.isArray(analysis?.works) ? analysis.works.slice(0, 6) : [];
+            if (works.length < 1) {
+                const empty = document.createElement('div');
+                empty.textContent = row.status === 'loading' ? '作品评分加载中' : '可用样本不足';
+                empty.style.cssText = [
+                    'height: 100%',
+                    'display: flex',
+                    'align-items: center',
+                    'color: rgba(255,255,255,0.48)',
+                    'font-size: 0.72em',
+                ].join(';');
+                worksWrap.append(empty);
+            } else {
+                works.forEach(work => worksWrap.append(renderWorkCard(work)));
+            }
+            mediaRow.append(worksWrap);
+            const commentsPane = renderCommentsPane(row);
+            commentsPane.style.marginTop = '0';
+            commentsPane.style.height = '100%';
+            mediaRow.append(commentsPane);
+            detailPane.append(mediaRow);
+        }
+
+        function renderWorkCard(work) {
+            const card = document.createElement('button');
+            card.type = 'button';
+            card.title = `${work.title} / ${work.role}`;
+            card.onclick = () => window.open(`https://bgm.tv/subject/${work.id}`, '_blank');
+            card.style.cssText = [
+                'width: auto',
+                'min-width: 0',
+                'height: 100%',
+                'aspect-ratio: 2 / 3',
+                'flex: 0 0 auto',
+                'padding: 0',
+                'border: 0',
+                'border-radius: 8px',
+                'overflow: hidden',
+                'position: relative',
+                'background: rgba(255,255,255,0.08)',
+                'cursor: pointer',
+                'box-shadow: 0 8px 22px rgba(0,0,0,0.22)',
+            ].join(';');
+            if (work.image) {
+                const image = document.createElement('img');
+                image.src = work.image;
+                image.alt = work.title;
+                image.style.cssText = 'width: 100%; height: 100%; object-fit: cover; object-position: center top;';
+                image.onerror = () => renderScoreFallback(card);
+                card.append(image);
+            } else {
+                renderScoreFallback(card);
+            }
+            const shade = document.createElement('div');
+            shade.style.cssText = [
+                'position: absolute',
+                'left: 0',
+                'right: 0',
+                'bottom: 0',
+                'height: 58%',
+                'background: linear-gradient(to top, rgba(0,0,0,0.92), rgba(0,0,0,0.52) 55%, rgba(0,0,0,0))',
+            ].join(';');
+            card.append(shade);
+            const text = document.createElement('div');
+            text.style.cssText = [
+                'position: absolute',
+                'left: 0',
+                'right: 0',
+                'bottom: 0',
+                'padding: 0.42em',
+                'box-sizing: border-box',
+                'text-align: left',
+            ].join(';');
+            const title = document.createElement('div');
+            title.textContent = work.title;
+            title.style.cssText = [
+                'color: rgba(255,255,255,0.92)',
+                'font-size: 0.58em',
+                'font-weight: 700',
+                'line-height: 1.18',
+                'display: -webkit-box',
+                '-webkit-line-clamp: 2',
+                '-webkit-box-orient: vertical',
+                'overflow: hidden',
+            ].join(';');
+            const score = document.createElement('div');
+            score.textContent = `${work.rawScore.toFixed(1)} / ${work.total}`;
+            score.style.cssText = [
+                'margin-top: 0.24em',
+                `color: ${getScoreColor(work.trustedScore)}`,
+                'font-size: 0.58em',
+                'font-weight: 820',
+                'font-variant-numeric: tabular-nums',
+            ].join(';');
+            text.append(title, score);
+            card.append(text);
+            return card;
+        }
+
+        function renderScoreFallback(container) {
+            container.innerHTML = '';
+            const fallback = document.createElement('div');
+            fallback.textContent = '暂无图片';
+            fallback.style.cssText = [
+                'width: 100%',
+                'height: 100%',
+                'display: flex',
+                'align-items: center',
+                'justify-content: center',
+                'background: rgba(255,255,255,0.08)',
+                'color: rgba(255,255,255,0.46)',
+                'font-size: 0.62em',
+            ].join(';');
+            container.append(fallback);
+        }
+
+        function renderCommentsPane(row) {
+            const pane = document.createElement('div');
+            pane.style.cssText = [
+                'flex: 1',
+                'min-height: 0',
+                'margin-top: 0.48em',
+                'display: flex',
+                'flex-direction: column',
+                'border-radius: 8px',
+                'background: rgba(0,0,0,0.14)',
+                'box-shadow: inset 0 0 0 1px rgba(255,255,255,0.045)',
+                'overflow: hidden',
+            ].join(';');
+
+            const header = document.createElement('div');
+            header.style.cssText = [
+                'height: 1.82em',
+                'min-height: 1.82em',
+                'display: flex',
+                'align-items: center',
+                'justify-content: space-between',
+                'padding: 0 0.62em',
+                'box-sizing: border-box',
+                'color: rgba(255,255,255,0.66)',
+                'font-size: 0.66em',
+                'font-weight: 760',
+            ].join(';');
+            const comments = sortPersonComments(Array.isArray(row.comments) ? row.comments : []);
+            header.textContent = row.commentsLoading ? '留言加载中' : `留言 ${comments.length}`;
+            pane.append(header);
+
+            const scroller = document.createElement('div');
+            scroller.className = 'ede-production-score-scroll';
+            scroller.style.cssText = [
+                'flex: 1',
+                'min-height: 0',
+                'overflow-y: auto',
+                'overflow-x: hidden',
+                'scrollbar-width: none',
+                '-ms-overflow-style: none',
+                'padding: 0 0.62em 0.52em',
+                'box-sizing: border-box',
+            ].join(';');
+            if (row.commentsLoading) {
+                scroller.append(renderCommentEmpty('正在读取 Bangumi 留言...'));
+            } else if (comments.length < 1) {
+                scroller.append(renderCommentEmpty('暂无留言'));
+            } else {
+                comments.forEach(comment => scroller.append(renderCommentItem(comment, false)));
+            }
+            pane.append(scroller);
+            return pane;
+        }
+
+        function renderCommentEmpty(text) {
+            const empty = document.createElement('div');
+            empty.textContent = text;
+            empty.style.cssText = [
+                'height: 100%',
+                'display: flex',
+                'align-items: center',
+                'color: rgba(255,255,255,0.44)',
+                'font-size: 0.66em',
+            ].join(';');
+            return empty;
+        }
+
+        function renderCommentItem(comment, isReply) {
+            const item = document.createElement('div');
+            item.style.cssText = [
+                'padding: 0.42em 0',
+                isReply ? 'margin-left: 1.1em' : '',
+                isReply ? 'border-left: 2px solid rgba(255,255,255,0.10)' : '',
+                isReply ? 'padding-left: 0.58em' : '',
+                'border-top: 1px solid rgba(255,255,255,0.055)',
+            ].filter(Boolean).join(';');
+
+            const meta = document.createElement('div');
+            meta.style.cssText = [
+                'display: flex',
+                'align-items: center',
+                'gap: 0.38em',
+                'color: rgba(255,255,255,0.38)',
+                'font-size: 0.58em',
+                'line-height: 1.2',
+            ].join(';');
+            const user = document.createElement('span');
+            user.textContent = comment.userName || '匿名';
+            user.style.cssText = 'color: rgba(255,255,255,0.48); font-weight: 720;';
+            const time = document.createElement('span');
+            time.textContent = comment.timeText || '';
+            time.style.cssText = 'color: rgba(255,255,255,0.32);';
+            meta.append(user, time);
+            item.append(meta);
+
+            const content = document.createElement('div');
+            content.textContent = comment.content || '';
+            content.style.cssText = [
+                'margin-top: 0.22em',
+                'color: rgba(255,255,255,0.82)',
+                'font-size: 0.66em',
+                'line-height: 1.36',
+                'white-space: pre-wrap',
+                'word-break: break-word',
+            ].join(';');
+            item.append(content);
+
+            sortPersonComments(comment.replies || []).forEach(reply => item.append(renderCommentItem(reply, true)));
+            return item;
+        }
+
+        async function runRowAnalysis(dialog) {
+            for (const row of rows) {
+                if (!document.body.contains(dialog)) { return; }
+                row.status = 'loading';
+                updateRow(row);
+                if (selectedRow?.id === row.id) { renderDetail(row); }
+                row.analysis = await analyzeStaffRow(row);
+                row.status = 'done';
+                updateRow(row);
+                if (selectedRow?.id === row.id) { renderDetail(row); }
+            }
+        }
+
+        async function analyzeStaffRow(row) {
+            try {
+                const personSubjects = await getPersonSubjectsCached(row.person.id);
+                const candidates = collectCandidateSubjects(personSubjects, row.group);
+                const limitedCandidates = takeCandidateBudget(candidates);
+                const works = await mapLimit(limitedCandidates, 2, async candidate => {
+                    const detail = await getSubjectDetailCached(candidate.subject.id);
+                    return buildScoredWork(candidate, detail);
+                });
+                const validWorks = works
+                    .filter(work => work && work.rawScore > 0 && work.total >= MIN_RATING_TOTAL)
+                    .sort((a, b) => b.trustedScore - a.trustedScore);
+                const scoredWorks = validWorks.filter(work => work.weight > 0);
+                const scoreStats = scoredWorks.length >= MIN_VALID_WORKS ? calcScoreStats(scoredWorks) : null;
+                return {
+                    score: scoreStats?.score || null,
+                    baseScore: scoreStats?.baseScore || null,
+                    recentScore: scoreStats?.recentScore || null,
+                    accidentCount: scoreStats?.accidentCount || 0,
+                    severeAccidentCount: scoreStats?.severeAccidentCount || 0,
+                    validCount: scoredWorks.length,
+                    candidateCount: candidates.length,
+                    usedBudget: limitedCandidates.length,
+                    works: validWorks,
+                };
+            } catch (error) {
+                logger.warn(`[Bangumi制作评分] 统计失败: ${row.person?.name || row.id}`, error.message || error);
+                return { score: null, baseScore: null, recentScore: null, accidentCount: 0, severeAccidentCount: 0, validCount: 0, candidateCount: 0, usedBudget: 0, works: [] };
+            }
+        }
+
+        function collectCandidateSubjects(subjects, group) {
+            const byId = new Map();
+            (Array.isArray(subjects) ? subjects : []).forEach(subject => {
+                if (!subject?.id || subject.type !== 2 || String(subject.id) === String(bangumiInfo.subjectId)) { return; }
+                const roleWeight = group.historyWeight(subject.staff || '');
+                if (!roleWeight) { return; }
+                const key = String(subject.id);
+                const existing = byId.get(key);
+                if (existing) {
+                    existing.roleWeight = Math.max(existing.roleWeight, roleWeight);
+                    existing.role = uniqueTextList([existing.role, subject.staff]).join(' / ');
+                } else {
+                    byId.set(key, { subject, roleWeight, role: subject.staff || '' });
+                }
+            });
+            return Array.from(byId.values())
+                .sort((a, b) => b.roleWeight - a.roleWeight || Number(b.subject.id) - Number(a.subject.id));
+        }
+
+        function takeCandidateBudget(candidates) {
+            const result = [];
+            for (const candidate of candidates.slice(0, MAX_WORKS_PER_PERSON)) {
+                const cacheKey = getSubjectCacheKey(candidate.subject.id);
+                const cached = readTimedCache(cacheKey, SUBJECT_DETAIL_TTL);
+                if (cached || subjectDetailBudget > 0) {
+                    if (!cached) { subjectDetailBudget--; }
+                    result.push(candidate);
+                }
+            }
+            return result;
+        }
+
+        async function getSubjectPersonsCached(subjectId) {
+            const key = `${CACHE_PREFIX}subject_persons_${subjectId}`;
+            const cached = readTimedCache(key, PERSON_SUBJECTS_TTL);
+            if (cached) { return cached; }
+            const persons = await fetchJson(bangumiApi.getSubjectPersons(subjectId), { timeoutMs: 12000 });
+            const safePersons = Array.isArray(persons) ? persons : [];
+            writeTimedCache(key, safePersons);
+            return safePersons;
+        }
+
+        async function getPersonSubjectsCached(personId) {
+            const key = `${CACHE_PREFIX}person_subjects_${personId}`;
+            const cached = readTimedCache(key, PERSON_SUBJECTS_TTL);
+            if (cached) { return cached; }
+            const subjects = await fetchJson(bangumiApi.getPersonSubjects(personId), { timeoutMs: 12000 });
+            const safeSubjects = Array.isArray(subjects) ? subjects : [];
+            writeTimedCache(key, safeSubjects);
+            return safeSubjects;
+        }
+
+        async function ensurePersonDetail(row) {
+            if (!row?.person?.id) { return null; }
+            if (row.personDetail) { return row.personDetail; }
+            if (personDetailRequests.has(row.person.id)) {
+                row.personDetail = await personDetailRequests.get(row.person.id);
+                row.person._detail = row.personDetail;
+                return row.personDetail;
+            }
+            const request = getPersonDetailCached(row.person.id)
+                .catch(error => {
+                    logger.debug('[Bangumi制作评分] 人物详情补全失败', error.message || error);
+                    return null;
+                })
+                .finally(() => personDetailRequests.delete(row.person.id));
+            personDetailRequests.set(row.person.id, request);
+            row.personDetail = await request;
+            row.person._detail = row.personDetail;
+            return row.personDetail;
+        }
+
+        async function ensurePersonComments(row) {
+            if (!row?.person?.id) { return []; }
+            if (Array.isArray(row.comments)) { return row.comments; }
+            if (personCommentRequests.has(row.person.id)) {
+                row.commentsLoading = true;
+                row.comments = await personCommentRequests.get(row.person.id);
+                row.commentsLoading = false;
+                return row.comments;
+            }
+            row.commentsLoading = true;
+            const request = getPersonCommentsCached(row.person.id)
+                .catch(error => {
+                    logger.debug('[Bangumi制作评分] 人物留言读取失败', error.message || error);
+                    return [];
+                })
+                .finally(() => personCommentRequests.delete(row.person.id));
+            personCommentRequests.set(row.person.id, request);
+            row.comments = await request;
+            row.commentsLoading = false;
+            return row.comments;
+        }
+
+        async function getPersonDetailCached(personId) {
+            const key = `${CACHE_PREFIX}person_detail_${personId}`;
+            const cached = readTimedCache(key, PERSON_DETAIL_TTL);
+            if (cached) { return cached; }
+            const detail = await fetchJson(bangumiApi.getPerson(personId), { timeoutMs: 12000 });
+            const compact = {
+                id: detail?.id,
+                name: detail?.name,
+                name_cn: detail?.name_cn,
+                type: detail?.type,
+                images: detail?.images,
+                summary: detail?.summary || detail?.short_summary || '',
+                short_summary: detail?.short_summary || '',
+                infobox: detail?.infobox || [],
+            };
+            writeTimedCache(key, compact);
+            return compact;
+        }
+
+        async function getPersonCommentsCached(personId) {
+            const key = `${CACHE_PREFIX}person_comments_${personId}`;
+            const cached = readTimedCache(key, PERSON_COMMENTS_TTL);
+            if (cached) { return sortPersonComments(cached); }
+            const comments = await fetchJson(bangumiApi.getPersonComments(personId), { timeoutMs: 12000 });
+            const safeComments = sortPersonComments(normalizePersonComments(comments));
+            writeTimedCache(key, safeComments);
+            return safeComments;
+        }
+
+        function normalizePersonComments(comments) {
+            return (Array.isArray(comments) ? comments : [])
+                .filter(comment => comment?.state !== 6 && String(comment?.content || '').trim())
+                .map(comment => ({
+                    id: comment.id,
+                    userName: comment.user?.nickname || comment.user?.username || '',
+                    createdAt: Number(comment.createdAt || 0),
+                    timeText: formatCommentTime(comment.createdAt),
+                    content: cleanCommentContent(comment.content),
+                    replies: sortPersonComments(normalizePersonComments(comment.replies || [])),
+                }));
+        }
+
+        function sortPersonComments(comments) {
+            return (Array.isArray(comments) ? [...comments] : [])
+                .sort((a, b) => getCommentSortTime(b) - getCommentSortTime(a));
+        }
+
+        function getCommentSortTime(comment) {
+            const createdAt = Number(comment?.createdAt || 0);
+            if (createdAt) { return createdAt; }
+            const time = Date.parse(comment?.timeText || '');
+            return Number.isNaN(time) ? 0 : Math.floor(time / 1000);
+        }
+
+        function formatCommentTime(seconds) {
+            if (!seconds) { return ''; }
+            const date = new Date(seconds * 1000);
+            if (Number.isNaN(date.getTime())) { return ''; }
+            return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+        }
+
+        function cleanCommentContent(content) {
+            return String(content || '')
+                .replace(/\r\n/g, '\n')
+                .replace(/\[quote\]/gi, '引用：')
+                .replace(/\[\/quote\]/gi, '\n')
+                .replace(/\[b\]([\s\S]*?)\[\/b\]/gi, '$1')
+                .replace(/\[url=([^\]]+)\]([\s\S]*?)\[\/url\]/gi, '$2')
+                .replace(/\[url\]([\s\S]*?)\[\/url\]/gi, '$1')
+                .replace(/\[.*?\]/g, '')
+                .replace(/\n{3,}/g, '\n\n')
+                .trim();
+        }
+
+        async function getSubjectDetailCached(subjectId) {
+            const key = getSubjectCacheKey(subjectId);
+            const cached = readTimedCache(key, SUBJECT_DETAIL_TTL);
+            if (cached) { return cached; }
+            const detail = await fetchJson(bangumiApi.getSubject(subjectId), { timeoutMs: 12000 });
+            const compact = compactSubjectDetail(detail);
+            writeTimedCache(key, compact);
+            return compact;
+        }
+
+        function getSubjectCacheKey(subjectId) {
+            return `${CACHE_PREFIX}subject_${subjectId}`;
+        }
+
+        function readTimedCache(key, ttl) {
+            try {
+                const raw = localStorage.getItem(key);
+                if (!raw) { return null; }
+                const parsed = JSON.parse(raw);
+                if (!parsed || Date.now() - parsed.time > ttl) { return null; }
+                return parsed.data;
+            } catch (error) {
+                return null;
+            }
+        }
+
+        function writeTimedCache(key, data) {
+            try {
+                localStorage.setItem(key, JSON.stringify({ time: Date.now(), data }));
+            } catch (error) {
+                logger.debug('[Bangumi制作评分] 缓存写入失败', error.message || error);
+            }
+        }
+
+        function compactSubjectDetail(detail) {
+            return {
+                id: detail?.id,
+                type: detail?.type,
+                name: detail?.name,
+                name_cn: detail?.name_cn,
+                date: detail?.date,
+                images: detail?.images,
+                rating: detail?.rating,
+            };
+        }
+
+        function buildScoredWork(candidate, detail) {
+            const rawScore = Number(detail?.rating?.score || 0);
+            const total = Number(detail?.rating?.total || 0);
+            const trustedScore = calcTrustedScore(rawScore, total);
+            return {
+                id: detail?.id || candidate.subject.id,
+                title: detail?.name_cn || detail?.name || candidate.subject.name_cn || candidate.subject.name || '未知作品',
+                image: detail?.images?.medium || detail?.images?.grid || candidate.subject.image || '',
+                role: candidate.role,
+                roleWeight: candidate.roleWeight,
+                rawScore,
+                total,
+                date: detail?.date || '',
+                year: getSubjectYear(detail?.date),
+                trustedScore,
+                weight: Math.sqrt(Math.min(total, 5000)) * candidate.roleWeight,
+            };
+        }
+
+        function calcTrustedScore(rawScore, total) {
+            if (!rawScore || !total) { return 0; }
+            return (total / (total + TRUST_GATE)) * rawScore + (TRUST_GATE / (total + TRUST_GATE)) * BASE_SCORE;
+        }
+
+        function calcWeightedScore(works) {
+            const sumWeight = works.reduce((sum, work) => sum + work.weight, 0);
+            if (!sumWeight) { return null; }
+            return works.reduce((sum, work) => sum + work.trustedScore * work.weight, 0) / sumWeight;
+        }
+
+        function calcScoreStats(works) {
+            const baseScore = calcWeightedScore(works);
+            if (!baseScore) { return null; }
+            const byDate = [...works].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+            const recentWorks = byDate.filter(work => work.year).slice(0, Math.min(6, byDate.length));
+            const recentScore = recentWorks.length >= 2 ? calcWeightedScore(recentWorks) : null;
+            const accidentWorks = works.filter(isAccidentWork);
+            const severeAccidentWorks = works.filter(isSevereAccidentWork);
+            const recentAccidentWorks = accidentWorks.filter(work => isRecentYear(work.year, 3));
+            const veryRecentAccidentWorks = accidentWorks.filter(work => isRecentYear(work.year, 1));
+            const accidentPenalty = accidentWorks.reduce((sum, work) => sum + getAccidentPenalty(work), 0);
+            const recentPenalty = recentAccidentWorks.length * 0.08 + veryRecentAccidentWorks.length * 0.08;
+            const trendPenalty = recentScore && recentScore < baseScore - 0.7 ? (baseScore - recentScore - 0.7) * 0.35 : 0;
+            const sampleCap = getSampleScoreCap(works.length);
+            const score = Math.max(1, Math.min(sampleCap, baseScore - accidentPenalty - recentPenalty - trendPenalty));
+            return {
+                score,
+                baseScore,
+                recentScore,
+                accidentCount: accidentWorks.length,
+                severeAccidentCount: severeAccidentWorks.length,
+            };
+        }
+
+        function isAccidentWork(work) {
+            return work.rawScore < 5 && work.total >= 200;
+        }
+
+        function isSevereAccidentWork(work) {
+            return work.rawScore < 4.3 && work.total >= 500;
+        }
+
+        function getAccidentPenalty(work) {
+            if (work.rawScore < 4 && work.total >= 800) { return 0.55; }
+            if (work.rawScore < 4.5 && work.total >= 500) { return 0.34; }
+            if (work.rawScore < 5 && work.total >= 200) { return 0.16; }
+            return 0;
+        }
+
+        function getSampleScoreCap(count) {
+            if (count <= 1) { return 5.8; }
+            if (count === 2) { return 6.2; }
+            if (count <= 4) { return 6.8; }
+            return 10;
+        }
+
+        function getSubjectYear(dateText) {
+            const match = String(dateText || '').match(/^(\d{4})/);
+            return match ? Number(match[1]) : null;
+        }
+
+        function isRecentYear(year, years) {
+            if (!year) { return false; }
+            return new Date().getFullYear() - year <= years;
+        }
+
+        function formatScore(score) {
+            return Number.isFinite(score) ? score.toFixed(1) : '—';
+        }
+
+        function formatAccidentRate(analysis) {
+            const validCount = Number(analysis?.validCount || 0);
+            const accidentCount = Number(analysis?.accidentCount || 0);
+            if (!validCount) { return '—'; }
+            return `${Math.round((accidentCount / validCount) * 100)}%`;
+        }
+
+        async function mapLimit(items, limit, worker) {
+            const result = new Array(items.length);
+            let index = 0;
+            const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
+                while (index < items.length) {
+                    const currentIndex = index++;
+                    try {
+                        result[currentIndex] = await worker(items[currentIndex], currentIndex);
+                    } catch (error) {
+                        logger.debug('[Bangumi制作评分] 条目详情补全失败', error.message || error);
+                        result[currentIndex] = null;
+                    }
+                }
+            });
+            await Promise.all(runners);
+            return result;
+        }
+
+        function getPersonImage(person, size = 'medium') {
+            const images = person?._detail?.images || person?.images || {};
+            return images[size] || images.medium || images.large || images.grid || images.small || '';
+        }
+
+        function renderPersonThumb(container, person, size = 'medium') {
+            container.innerHTML = '';
+            const imageUrl = getPersonImage(person, size);
+            if (imageUrl) {
+                const image = document.createElement('img');
+                image.src = imageUrl;
+                image.alt = getPersonDisplayName(person);
+                image.style.cssText = 'width: 100%; height: 100%; object-fit: cover; object-position: center top;';
+                image.onerror = () => renderPersonFallback(container, person);
+                container.append(image);
+            } else {
+                renderPersonFallback(container, person);
+            }
+        }
+
+        function renderPersonFallback(container, person) {
+            container.innerHTML = '';
+            const fallback = document.createElement('div');
+            const displayName = getPersonDisplayName(person);
+            fallback.textContent = person?.type === 2 ? '社' : (displayName ? displayName.slice(0, 1) : '?');
+            fallback.style.cssText = [
+                'width: 100%',
+                'height: 100%',
+                'display: flex',
+                'align-items: center',
+                'justify-content: center',
+                'background: linear-gradient(145deg, rgba(255,255,255,0.16), rgba(255,255,255,0.05))',
+                'color: rgba(255,255,255,0.68)',
+                'font-size: 0.78em',
+                'font-weight: 820',
+            ].join(';');
+            container.append(fallback);
+        }
+
+        function getPersonDisplayName(person) {
+            return person?._detail?.name_cn || person?._detail?.name || person?.name_cn || person?.name || '未知人物';
+        }
+
+        function getPersonSummary(row) {
+            const summary = String(
+                row?.personDetail?.summary
+                || row?.person?._detail?.summary
+                || row?.personDetail?.short_summary
+                || row?.person?._detail?.short_summary
+                || ''
+            ).trim();
+            return cleanPersonSummary(summary) || '暂无介绍';
+        }
+
+        function cleanPersonSummary(summary) {
+            return String(summary || '')
+                .replace(/\r\n/g, '\n')
+                .replace(/\n{3,}/g, '\n\n')
+                .replace(/\[url=([^\]]+)\]([\s\S]*?)\[\/url\]/gi, '$2')
+                .replace(/\[url\]([\s\S]*?)\[\/url\]/gi, '$1')
+                .replace(/\[b\]([\s\S]*?)\[\/b\]/gi, '$1')
+                .replace(/\[\[(?:[^\]|]+\|)?([^\]]+)\]\]/g, '$1')
+                .replace(/\[.*?\]/g, '')
+                .replace(/'''/g, '')
+                .trim();
+        }
+
+        function getScoreColor(score) {
+            if (score >= 8) { return '#f4c542'; }
+            if (score >= 7) { return '#b885ff'; }
+            if (score >= 6) { return '#5aa8ff'; }
+            if (score >= 5) { return '#62d17d'; }
+            if (score >= 4) { return '#a8a8a8'; }
+            return '#d96b6b';
+        }
+
+        function getScoreGlow(score) {
+            if (score >= 8) { return 'rgba(244,197,66,0.62)'; }
+            if (score >= 7) { return 'rgba(184,133,255,0.58)'; }
+            if (score >= 6) { return 'rgba(90,168,255,0.52)'; }
+            if (score >= 5) { return 'rgba(98,209,125,0.46)'; }
+            if (score >= 4) { return 'rgba(168,168,168,0.36)'; }
+            return 'rgba(217,107,107,0.46)';
         }
     }
 

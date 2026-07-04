@@ -1,14 +1,14 @@
 ﻿// ==UserScript==
 // @name         Emby danmaku extension - Emby style
 // @description  Emby弹幕插件 - Emby风格
-// @namespace    https://github.com/l429609201/dd-danmaku
+// @namespace    https://github.com/ikemenrourou/dd-danmaku
 // @author       misaka10876, chen3861229
 // @version      1.2.3
 // @copyright    2024, misaka10876 (https://github.com/l429609201)
 // @license      MIT; https://raw.githubusercontent.com/RyoLee/emby-danmaku/master/LICENSE
 // @icon         https://github.githubassets.com/pinned-octocat.svg
 // @grant        none
-// @updateURL    https://raw.githubusercontent.com/l429609201/dd-danmaku/main/ede.js
+// @updateURL    https://raw.githubusercontent.com/ikemenrourou/dd-danmaku/main/ede.js
 // @match        *://*/web/index.html
 // @match        *://*/web/
 // ==/UserScript==
@@ -37,7 +37,7 @@
     // note02: url 禁止使用相对路径,非 web 环境的根路径为文件路径,非 http
     // ------ 程序内部使用,请勿更改 start ------
     const openSourceLicense = {
-        self: { version: '1.2.3', name: 'Emby Danmaku Extension (misaka10876 Fork)', license: 'MIT License', url: 'https://github.com/l429609201/dd-danmaku' },
+        self: { version: '1.2.3', name: 'Emby Danmaku Extension (misaka10876 Fork)', license: 'MIT License', url: 'https://github.com/ikemenrourou/dd-danmaku' },
         chen3861229: { version: '1.45', name: 'Emby Danmaku Extension(Forked from original:1.11)', license: 'MIT License', url: 'https://github.com/chen3861229/dd-danmaku' },
         original: { version: '1.11', name: 'Emby Danmaku Extension', license: 'MIT License', url: 'https://github.com/RyoLee/emby-danmaku' },
         jellyfinFork: { version: '1.52', name: 'Jellyfin Danmaku Extension', license: 'MIT License', url: 'https://github.com/Izumiko/jellyfin-danmaku' },
@@ -1199,6 +1199,122 @@
     async function fatchEmbyItemInfo(id) {
         if (!id) { return; }
         return await ApiClient.getItem(ApiClient.getCurrentUserId(), id);
+    }
+
+    function pickBangumiMetadataFields(item) {
+        if (!item) { return null; }
+        return {
+            Id: item.Id,
+            Type: item.Type,
+            Name: item.Name,
+            OriginalTitle: item.OriginalTitle,
+            SeriesName: item.SeriesName,
+            ParentIndexNumber: item.ParentIndexNumber,
+            IndexNumber: item.IndexNumber,
+            SeasonId: item.SeasonId,
+            SeriesId: item.SeriesId,
+            ParentId: item.ParentId,
+            ProviderIds: item.ProviderIds || {},
+            ExternalUrls: item.ExternalUrls || [],
+            HomePageUrl: item.HomePageUrl || '',
+            ProductionYear: item.ProductionYear || null,
+        };
+    }
+
+    function getBangumiMetadataCandidates(summary) {
+        const candidates = [];
+        Object.entries(summary).forEach(([layer, item]) => {
+            if (!item) { return; }
+            const providerIds = item.ProviderIds || {};
+            Object.entries(providerIds).forEach(([key, value]) => {
+                if (/bangumi|bgm/i.test(key) && value) {
+                    const kind = layer === 'episode' && item.Type === 'Episode' ? 'episode' : 'subject';
+                    candidates.push({ layer, kind, source: `ProviderIds.${key}`, value: String(value) });
+                }
+            });
+            (item.ExternalUrls || []).forEach(urlInfo => {
+                const url = typeof urlInfo === 'string' ? urlInfo : urlInfo?.Url;
+                const match = url && url.match(/bgm\.tv\/(?:subject|ep)\/(\d+)/i);
+                if (match) {
+                    const kind = /bgm\.tv\/ep\//i.test(url) ? 'episode' : 'subject';
+                    candidates.push({ layer, kind, source: 'ExternalUrls', value: match[1], url });
+                }
+            });
+            const homePageMatch = item.HomePageUrl && item.HomePageUrl.match(/bgm\.tv\/(?:subject|ep)\/(\d+)/i);
+            if (homePageMatch) {
+                const kind = /bgm\.tv\/ep\//i.test(item.HomePageUrl) ? 'episode' : 'subject';
+                candidates.push({ layer, kind, source: 'HomePageUrl', value: homePageMatch[1], url: item.HomePageUrl });
+            }
+        });
+        return candidates;
+    }
+
+    function getBangumiIdsFromEmbyCandidates(candidates) {
+        if (!Array.isArray(candidates)) {
+            return { bgmSubjectId: null, bgmEpisodeId: null };
+        }
+        const firstValue = (kind, layers) => {
+            const found = candidates.find(item => item.kind === kind && layers.includes(item.layer));
+            return found?.value ? parseInt(found.value, 10) : null;
+        };
+        return {
+            bgmSubjectId: firstValue('subject', ['season', 'series', 'episode']),
+            bgmEpisodeId: firstValue('episode', ['episode']),
+        };
+    }
+
+    async function fetchEmbyItemForBangumiMetadata(id) {
+        if (!id) { return null; }
+        const userId = ApiClient.getCurrentUserId();
+        const url = ApiClient.getUrl(`Users/${userId}/Items/${id}`, {
+            Fields: 'ProviderIds,ExternalUrls,Path,Genres,Tags,OriginalTitle,Overview,HomePageUrl,ProductionYear,ParentId,SeriesId,SeasonId',
+        });
+        return await ApiClient.getJSON(url);
+    }
+
+    async function getEmbyBangumiMetadata(item) {
+        if (!item?.Id || !window.ede) { return; }
+        if (window.ede.lastEmbyBangumiMetadataItemId === item.Id && window.ede.embyBangumiMetadata) {
+            return window.ede.embyBangumiMetadata;
+        }
+        window.ede.lastEmbyBangumiMetadataItemId = item.Id;
+
+        const episode = await fetchEmbyItemForBangumiMetadata(item.Id).catch(error => {
+            logger.warn('[Bangumi映射] 获取 Episode 元数据失败，使用播放项已有数据:', error.message || error);
+            return item;
+        });
+        const seasonId = episode?.SeasonId || item.SeasonId || episode?.ParentId || item.ParentId;
+        const seriesId = episode?.SeriesId || item.SeriesId;
+
+        const [season, series] = await Promise.all([
+            seasonId && seasonId !== episode?.Id ? fetchEmbyItemForBangumiMetadata(seasonId).catch(error => {
+                logger.warn('[Bangumi映射] 获取 Season 元数据失败:', error.message || error);
+                return null;
+            }) : null,
+            seriesId && seriesId !== episode?.Id ? fetchEmbyItemForBangumiMetadata(seriesId).catch(error => {
+                logger.warn('[Bangumi映射] 获取 Series 元数据失败:', error.message || error);
+                return null;
+            }) : null,
+        ]);
+
+        const summary = {
+            episode: pickBangumiMetadataFields(episode),
+            season: pickBangumiMetadataFields(season),
+            series: pickBangumiMetadataFields(series),
+        };
+        const candidates = getBangumiMetadataCandidates(summary);
+        const ids = getBangumiIdsFromEmbyCandidates(candidates);
+        window.ede.embyBangumiMetadata = {
+            itemId: item.Id,
+            ...ids,
+        };
+
+        if (ids.bgmSubjectId || ids.bgmEpisodeId) {
+            logger.info(`[Bangumi映射] 使用 Emby Bangumi 元数据: subject=${ids.bgmSubjectId || '无'}, episode=${ids.bgmEpisodeId || '无'}`);
+        } else {
+            logger.debug('[Bangumi映射] Emby 元数据中未发现 Bangumi ID');
+        }
+        return window.ede.embyBangumiMetadata;
     }
 
     async function fetchSearchEpisodes(anime, episode, prefix) {
@@ -3040,16 +3156,24 @@
         }
 
         window.ede.itemId = item.Id;
+        const embyBangumiMetadata = await getEmbyBangumiMetadata(item).catch(error => {
+            logger.warn('[Bangumi映射] Emby Bangumi 元数据读取失败:', error.message || error);
+            return null;
+        });
         let _id;
         let animeName;
         let animeId = -1;
         let episode;
+        let episodeTitle = '';
+        let animeOriginalTitle = '';
         if (item.Type === 'Episode') {
             _id = item.SeasonId;
             const seriesName = item.SeriesName;
             const seasonNumber = item.ParentIndexNumber;
             const episodeNumber = item.IndexNumber;
             episode = episodeNumber;
+            episodeTitle = item.Name || '';
+            animeOriginalTitle = item.OriginalTitle || '';
             if (seasonNumber !== undefined && episodeNumber !== undefined) {
                 animeName = `${seriesName} S${String(seasonNumber).padStart(2, '0')}E${String(episodeNumber).padStart(2, '0')}`;
             } else {
@@ -3058,6 +3182,8 @@
         } else {
             _id = item.Id;
             animeName = item.Name;
+            episodeTitle = item.Name || '';
+            animeOriginalTitle = item.OriginalTitle || '';
             episode = 'movie';
         }
         let _id_key = lsLocalKeys.animePrefix + _id;
@@ -3116,10 +3242,14 @@
             animeId: animeId,
             episode: episode, // this is episode index, not a program index
             animeName: animeName,
+            episodeTitle: episodeTitle,
+            animeOriginalTitle: animeOriginalTitle,
             seriesName: item.SeriesName || item.Name || '',   // [新增] 系列名称，供集数偏移规则匹配
             seasonNumber: item.ParentIndexNumber || null,     // [新增] 季号，供集数偏移规则匹配
             productionYear: item.ProductionYear || null,
             seriesOrMovieId: item.SeriesId || item.Id,
+            bgmSubjectId: embyBangumiMetadata?.bgmSubjectId || null,
+            bgmEpisodeId: embyBangumiMetadata?.bgmEpisodeId || null,
             // 新增：提取匹配所需的文件信息
             streamUrl: streamUrl,
             size: mediaSource?.Size,
@@ -3589,7 +3719,7 @@
 
         const itemInfoMap = await getMapByEmbyItemInfo();
         if (!itemInfoMap) { return null; }
-        const { _episode_key, animeId, episode, seriesOrMovieId, animeName, seriesName, seasonNumber, productionYear } = itemInfoMap;
+        const { _episode_key, animeId, episode, seriesOrMovieId, animeName, episodeTitle, seriesName, seasonNumber, productionYear, bgmSubjectId, bgmEpisodeId } = itemInfoMap;
 
         logger.info(`[匹配 #${matchId}] 开始获取弹幕: ${animeName} 第${episode}集`);
 
@@ -3676,6 +3806,28 @@
             // 播放界面右下角添加弹幕信息
             appendvideoOsdDanmakuInfo();
             // toastByDanmaku('弹弹 Play 章节匹配失败', 'error');
+            if (bgmSubjectId || bgmEpisodeId) {
+                const fallbackEpisodeInfo = {
+                    ...itemInfoMap,
+                    episodeId: null,
+                    episode: episode,
+                    episodeTitle: episodeTitle || animeName,
+                    episodeIndex: isNaN(episode) ? 0 : episode - 1,
+                    animeId: null,
+                    animeTitle: seriesName || animeName,
+                    imageUrl: '',
+                    _episode_key: _episode_key,
+                    bangumiIdHint: bgmSubjectId,
+                    bgmSubjectId: bgmSubjectId || null,
+                    bgmEpisodeId: bgmEpisodeId || null,
+                    seriesOrMovieId: seriesOrMovieId,
+                    apiName: '',
+                    apiPrefix: '',
+                };
+                localStorage.setItem(unique_episode_key, JSON.stringify(fallbackEpisodeInfo));
+                logger.info(`[Bangumi映射] 弹幕匹配失败，但已使用 Emby Bangumi 元数据: subject=${bgmSubjectId || '无'}, episode=${bgmEpisodeId || '无'}`);
+                return fallbackEpisodeInfo;
+            }
             return null;
         }
         // 处理来自 /match 的直接匹配结果
@@ -3695,8 +3847,8 @@
                 seasonNumber: seasonNumber,
                 productionYear: productionYear,
                 bangumiIdHint: res.episodeInfo.bangumiId || null,
-                bgmSubjectId: null,
-                bgmEpisodeId: null,
+                bgmSubjectId: bgmSubjectId || null,
+                bgmEpisodeId: bgmEpisodeId || null,
                 apiName: res.apiName,
                 apiPrefix: res.apiPrefix,
             };
@@ -3723,6 +3875,28 @@
         // 健壮性检查：确保 animes[selectAnime_id] 和 episodes 存在
         if (!animaInfo.animes[selectAnime_id] || !animaInfo.animes[selectAnime_id].episodes || animaInfo.animes[selectAnime_id].episodes.length === 0) {
             logger.error('匹配逻辑错误：未能找到有效的分集信息。');
+            if (bgmSubjectId || bgmEpisodeId) {
+                const fallbackEpisodeInfo = {
+                    ...itemInfoMap,
+                    episodeId: null,
+                    episode: episode,
+                    episodeTitle: episodeTitle || animeName,
+                    episodeIndex: isNaN(episode) ? 0 : episode - 1,
+                    animeId: animaInfo.animes[selectAnime_id]?.animeId || null,
+                    animeTitle: animaInfo.animes[selectAnime_id]?.animeTitle || seriesName || animeName,
+                    imageUrl: animaInfo.animes[selectAnime_id]?.imageUrl || '',
+                    _episode_key: _episode_key,
+                    bangumiIdHint: bgmSubjectId,
+                    bgmSubjectId: bgmSubjectId || null,
+                    bgmEpisodeId: bgmEpisodeId || null,
+                    seriesOrMovieId: seriesOrMovieId,
+                    apiPrefix: apiPrefix,
+                    apiName: apiName,
+                };
+                localStorage.setItem(unique_episode_key, JSON.stringify(fallbackEpisodeInfo));
+                logger.info(`[Bangumi映射] 弹幕分集缺失，但已使用 Emby Bangumi 元数据: subject=${bgmSubjectId || '无'}, episode=${bgmEpisodeId || '无'}`);
+                return fallbackEpisodeInfo;
+            }
             return null;
         }
         // [修复] 根据 episodeIndex 定位到正确的分集，而非永远取 episodes[0]
@@ -3767,8 +3941,8 @@
             seasonNumber: seasonNumber,
             productionYear: productionYear,
             bangumiIdHint: animaInfo.animes[selectAnime_id].bangumiId || null,
-            bgmSubjectId: null,
-            bgmEpisodeId: null,
+            bgmSubjectId: bgmSubjectId || null,
+            bgmEpisodeId: bgmEpisodeId || null,
             seriesOrMovieId: seriesOrMovieId,
             apiPrefix: apiPrefix, // [修正] 保存API前缀
             apiName: apiName, // [新增] 保存API名称

@@ -4,6 +4,8 @@
 
 ![Bangumi功能展示](https://raw.githubusercontent.com/ikemenrourou/dd-danmaku/main/images/bangumi-feature.png)
 
+![Bangumi制作评分](https://raw.githubusercontent.com/ikemenrourou/dd-danmaku/main/images/bangumi-production-score.png)
+
 ---
 
 参考项目:

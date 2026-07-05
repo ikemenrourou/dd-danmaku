@@ -88,6 +88,7 @@
         getPersonCharacters: (personId) => `${bangumiApi.prefix}/persons/${personId}/characters`,
         getPersonSubjects: (personId) => `${bangumiApi.prefix}/persons/${personId}/subjects`,
         getPersonComments: (personId) => `https://next.bgm.tv/p1/persons/${personId}/comments`,
+        getEpisodeComments: (episodeId) => `https://next.bgm.tv/p1/episodes/${episodeId}/comments`,
         // need auth
         getMe: () => `${bangumiApi.prefix}/me`,
         getUserCollection: (userName, subjectId) => `${bangumiApi.prefix}/users/${userName}/collections/${subjectId}`,
@@ -201,6 +202,7 @@
         text_format: 'translate',
         person: 'person',
         sentiment_very_satisfied: 'sentiment_very_satisfied',
+        smart_toy: 'smart_toy',
         check: 'check',
         edit: 'edit',
         layers_clear: 'layers_clear',  // 防重叠图标
@@ -417,6 +419,18 @@
         configPersistenceEnable: { id: 'danmakuConfigPersistenceEnable', defaultValue: false, name: '启用配置持久化' },
         configPersistenceAutoSync: { id: 'danmakuConfigPersistenceAutoSync', defaultValue: false, name: '实时同步' },
         configPersistenceNamespace: { id: 'danmakuConfigPersistenceNamespace', defaultValue: 'dd-danmaku', name: '同步标识符' },
+        llmBaseUrl: { id: 'danmakuLlmBaseUrl', defaultValue: '', name: 'LLM Base URL' },
+        llmApiKey: { id: 'danmakuLlmApiKey', defaultValue: '', name: 'LLM API Key' },
+        llmModel: { id: 'danmakuLlmModel', defaultValue: '', name: 'LLM 模型' },
+        llmModelsCache: { id: 'danmakuLlmModelsCache', defaultValue: [], name: 'LLM 模型缓存' },
+        llmProviders: { id: 'danmakuLlmProviders', defaultValue: [], name: 'LLM 供应商' },
+        llmActiveProviderId: { id: 'danmakuLlmActiveProviderId', defaultValue: '', name: '当前 LLM 供应商' },
+        llmPersonas: { id: 'danmakuLlmPersonas', defaultValue: [], name: 'LLM 人设' },
+        llmActivePersonaId: { id: 'danmakuLlmActivePersonaId', defaultValue: 'default', name: '当前 LLM 人设' },
+        llmTemperature: { id: 'danmakuLlmTemperature', defaultValue: 0.3, name: 'LLM 温度', min: 0, max: 1, step: 0.1 },
+        llmSubtitleRange: { id: 'danmakuLlmSubtitleRange', defaultValue: 'untilCurrent', name: '字幕范围' },
+        llmDanmakuRange: { id: 'danmakuLlmDanmakuRange', defaultValue: 'recent2m', name: '弹幕范围' },
+        llmBangumiComments: { id: 'danmakuLlmBangumiComments', defaultValue: false, name: '读取章节讨论' },
     };
     const lsLocalKeys = {
         animePrefix: '_anime_id_rel_',
@@ -557,6 +571,7 @@
         episodeIframe: 'episodeIframe',
         charactersDialog: 'charactersDialog',
         productionScoreDialog: 'productionScoreDialog',
+        llmAssistantDialog: 'llmAssistantDialog',
         antiOverlapBtn: 'antiOverlapBtn',
         antiOverlapDiv: 'antiOverlapDiv',
         excludedLibrariesDiv: 'excludedLibrariesDiv',
@@ -578,6 +593,7 @@
         { label: '章节信息', iconKey: iconKeys.info, onClick: showEpisodeDialog },
         { label: '角色介绍', iconKey: iconKeys.person, onClick: showCharactersInfo },
         { label: '制作评分', iconKey: iconKeys.sentiment_very_satisfied, onClick: showProductionScore },
+        { label: 'AI助手', iconKey: iconKeys.smart_toy, onClick: showLlmAssistant },
     ];
     const customeUrlMsg1 = '限弹弹 play API 兼容结构';
     const customeUrl = {
@@ -5193,6 +5209,1862 @@
         setTimeout(() => document.addEventListener('pointerdown', close, true), 0);
     }
 
+    async function showLlmAssistant(event) {
+        const existingDialog = getById(eleIds.llmAssistantDialog);
+        if (existingDialog) {
+            existingDialog.remove();
+            return;
+        }
+
+        ensureLlmProviders();
+        ensureLlmPersonas();
+        const state = getLlmAssistantState();
+        state.activeTab = state.activeTab || 'chat';
+        state.sending = false;
+
+        const dialog = document.createElement('div');
+        dialog.id = eleIds.llmAssistantDialog;
+        bindLlmDialogKeyboardIsolation(dialog);
+        dialog.style.cssText = [
+            'position: fixed',
+            'right: 3.4vw',
+            'bottom: 10.5vh',
+            'width: min(980px, 76vw)',
+            'height: min(760px, 78vh)',
+            'min-width: 680px',
+            'min-height: 520px',
+            'display: flex',
+            'flex-direction: column',
+            'z-index: 1002',
+            'border-radius: 10px',
+            'background: rgba(18,20,23,0.82)',
+            'box-shadow: inset 0 1px 0 rgba(255,255,255,0.12), 0 24px 72px rgba(0,0,0,0.48)',
+            'backdrop-filter: blur(30px) saturate(140%)',
+            '-webkit-backdrop-filter: blur(30px) saturate(140%)',
+            'overflow: hidden',
+            'color: rgba(255,255,255,0.90)',
+        ].join(';');
+
+        const localStyle = document.createElement('style');
+        localStyle.textContent = `
+            #${eleIds.llmAssistantDialog} .ede-llm-scroll::-webkit-scrollbar { display: none; }
+            #${eleIds.llmAssistantDialog} button:focus { outline: none; }
+            #${eleIds.llmAssistantDialog} button { font: inherit; }
+            #${eleIds.llmAssistantDialog} textarea,
+            #${eleIds.llmAssistantDialog} input,
+            #${eleIds.llmAssistantDialog} select {
+                background: rgba(0,0,0,0.22);
+                color: rgba(255,255,255,0.88);
+                border: 1px solid rgba(255,255,255,0.12);
+                border-radius: 7px;
+                box-sizing: border-box;
+            }
+            #${eleIds.llmAssistantDialog} .ede-llm-md p { margin: 0.36em 0; }
+            #${eleIds.llmAssistantDialog} .ede-llm-md ul,
+            #${eleIds.llmAssistantDialog} .ede-llm-md ol { margin: 0.36em 0; padding-left: 1.25em; }
+            #${eleIds.llmAssistantDialog} .ede-llm-md li { margin: 0.18em 0; }
+            #${eleIds.llmAssistantDialog} .ede-llm-md code {
+                padding: 0.08em 0.28em;
+                border-radius: 4px;
+                background: rgba(255,255,255,0.12);
+                color: rgba(255,255,255,0.94);
+            }
+            #${eleIds.llmAssistantDialog} .ede-llm-md pre {
+                margin: 0.46em 0;
+                padding: 0.62em;
+                border-radius: 7px;
+                background: rgba(0,0,0,0.30);
+                overflow-x: auto;
+                white-space: pre-wrap;
+            }
+            #${eleIds.llmAssistantDialog} .ede-llm-md pre code { padding: 0; background: transparent; }
+            #${eleIds.llmAssistantDialog} .ede-llm-md blockquote {
+                margin: 0.45em 0;
+                padding-left: 0.7em;
+                border-left: 3px solid rgba(255,255,255,0.22);
+                color: rgba(255,255,255,0.72);
+            }
+        `;
+        dialog.append(localStyle);
+
+        const header = document.createElement('div');
+        header.style.cssText = [
+            'height: 3.4em',
+            'min-height: 3.4em',
+            'padding: 0 0.82em',
+            'display: grid',
+            'grid-template-columns: minmax(0,1fr) auto',
+            'align-items: center',
+            'gap: 0.8em',
+            'border-bottom: 1px solid rgba(255,255,255,0.09)',
+        ].join(';');
+        const titleWrap = document.createElement('div');
+        titleWrap.style.cssText = 'min-width:0;display:flex;align-items:center;gap:0.7em;';
+        const title = document.createElement('div');
+        title.textContent = 'AI 助手';
+        title.style.cssText = 'font-size:0.98em;font-weight:780;white-space:nowrap;';
+        const subtitle = document.createElement('div');
+        subtitle.style.cssText = 'min-width:0;color:rgba(255,255,255,0.48);font-size:0.66em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
+        titleWrap.append(title, subtitle);
+        const closeButton = document.createElement('button');
+        closeButton.textContent = '×';
+        closeButton.title = '关闭';
+        closeButton.style.cssText = 'width:2em;height:2em;border:0;border-radius:50%;background:rgba(255,255,255,0.12);color:#fff;font-size:1.2em;line-height:1;cursor:pointer;';
+        closeButton.onclick = () => dialog.remove();
+        header.append(titleWrap, closeButton);
+        dialog.append(header);
+
+        const tabs = document.createElement('div');
+        tabs.style.cssText = [
+            'height: 2.75em',
+            'min-height: 2.75em',
+            'padding: 0 0.82em',
+            'display: flex',
+            'align-items: center',
+            'gap: 0.42em',
+            'border-bottom: 1px solid rgba(255,255,255,0.07)',
+        ].join(';');
+        dialog.append(tabs);
+
+        const body = document.createElement('div');
+        body.style.cssText = 'flex:1;min-height:0;position:relative;overflow:hidden;';
+        dialog.append(body);
+
+        const views = {
+            chat: createLlmView(body),
+            context: createLlmView(body),
+            providers: createLlmView(body),
+            personas: createLlmView(body),
+        };
+        [
+            ['chat', '聊天'],
+            ['context', '上下文'],
+            ['providers', '供应商'],
+            ['personas', '人设'],
+        ].forEach(([id, label]) => {
+            const button = document.createElement('button');
+            button.textContent = label;
+            button.dataset.tab = id;
+            button.style.cssText = buildLlmTabStyle(id === state.activeTab);
+            button.onclick = () => {
+                state.activeTab = id;
+                renderAll();
+            };
+            tabs.append(button);
+        });
+
+        const status = document.createElement('div');
+        status.style.cssText = [
+            'height: 1.85em',
+            'min-height: 1.85em',
+            'display: flex',
+            'align-items: center',
+            'padding: 0 0.95em',
+            'border-top: 1px solid rgba(255,255,255,0.06)',
+            'color: rgba(255,255,255,0.50)',
+            'font-size: 0.62em',
+        ].join(';');
+        dialog.append(status);
+
+        document.body.append(dialog);
+        renderAll();
+
+        function renderAll() {
+            const provider = getActiveLlmProvider();
+            const persona = getActiveLlmPersona();
+            subtitle.textContent = `${provider?.name || '未配置供应商'} · ${provider?.model || '未选择模型'} · ${persona?.name || '普通助手'}`;
+            Array.from(tabs.children).forEach(button => {
+                button.style.cssText = buildLlmTabStyle(button.dataset.tab === state.activeTab);
+            });
+            objectEntries(views).forEach(([id, view]) => {
+                const active = id === state.activeTab;
+                view.hidden = !active;
+                view.style.display = active ? '' : 'none';
+            });
+            try {
+                if (state.activeTab === 'chat') { renderLlmChatView(); }
+                if (state.activeTab === 'context') { renderLlmContextView(); }
+                if (state.activeTab === 'providers') { renderLlmProvidersView(); }
+                if (state.activeTab === 'personas') { renderLlmPersonasView(); }
+            } catch (error) {
+                logger.error('[LLM请求] AI 助手界面渲染失败:', error);
+                setLlmDialogStatus(status, `界面渲染失败: ${error.message || error}`, 'red');
+            }
+        }
+
+        function renderLlmChatView() {
+            const view = views.chat;
+            view.innerHTML = '';
+            view.style.display = 'flex';
+            view.style.flexDirection = 'column';
+            view.append(buildLlmActiveBar(renderAll));
+
+            const quickWrap = document.createElement('div');
+            quickWrap.style.cssText = 'display:flex;gap:0.45em;flex-wrap:wrap;margin-bottom:0.62em;';
+            [
+                ['解释当前场景', '解释当前剧情场景，结合字幕、弹幕、角色和 Bangumi 信息回答。'],
+                ['总结到目前', '总结本集到当前时间为止发生了什么，不要剧透当前时间之后的内容。'],
+                ['弹幕在说什么', '解释附近弹幕在刷什么梗、为什么会这样吐槽。'],
+                ['制作分析', '结合制作人员、动画公司、角色和本集观感，分析这集值得注意的制作信息。'],
+            ].forEach(([label, prompt]) => {
+                const btn = buildLlmDialogButton(label);
+                btn.onclick = () => { question.value = prompt; question.focus(); };
+                quickWrap.append(btn);
+            });
+            view.append(quickWrap);
+
+            const messagesWrap = document.createElement('div');
+            messagesWrap.className = 'ede-llm-scroll';
+            messagesWrap.style.cssText = [
+                'flex: 1',
+                'min-height: 0',
+                'overflow-y: auto',
+                'scrollbar-width: none',
+                '-ms-overflow-style: none',
+                'padding: 0 0.1em 0.55em',
+                'box-sizing: border-box',
+            ].join(';');
+            if (state.messages.length < 1) {
+                messagesWrap.append(renderLlmEmptyChat());
+            } else {
+                state.messages.forEach(message => messagesWrap.append(renderLlmMessage(message)));
+            }
+            view.append(messagesWrap);
+
+            const composer = document.createElement('div');
+            composer.style.cssText = [
+                'min-height: 7.5em',
+                'padding-top: 0.64em',
+                'border-top: 1px solid rgba(255,255,255,0.07)',
+                'display: grid',
+                'grid-template-columns: minmax(0,1fr) auto',
+                'gap: 0.56em',
+            ].join(';');
+            const question = document.createElement('textarea');
+            question.rows = 4;
+            question.value = state.draftQuestion || '';
+            question.placeholder = '问当前剧情、弹幕、角色、制作信息。Ctrl+Enter 发送。';
+            question.style.cssText = 'width:100%;height:100%;resize:none;padding:0.7em;line-height:1.42;';
+            question.oninput = () => {
+                state.draftQuestion = question.value;
+                saveLlmAssistantState(state);
+            };
+            question.onkeydown = event => {
+                if (event.ctrlKey && event.key === 'Enter') {
+                    event.preventDefault();
+                    sendMessage(question);
+                }
+            };
+            const actions = document.createElement('div');
+            actions.style.cssText = 'display:flex;flex-direction:column;gap:0.46em;width:7.2em;';
+            const sendButton = buildLlmDialogButton(state.sending ? '发送中' : '发送');
+            sendButton.disabled = state.sending;
+            sendButton.style.height = '2.5em';
+            sendButton.onclick = () => sendMessage(question);
+            const clearButton = buildLlmDialogButton('清空');
+            clearButton.onclick = () => {
+                state.messages = [];
+                state.lastContext = '';
+                state.draftQuestion = '';
+                saveLlmAssistantState(state);
+                question.value = '';
+                renderAll();
+                setLlmDialogStatus(status, '已开启新对话', 'green');
+            };
+            const previewButton = buildLlmDialogButton('预览上下文');
+            previewButton.onclick = () => {
+                state.draftQuestion = question.value.trim();
+                saveLlmAssistantState(state);
+                state.activeTab = 'context';
+                renderAll();
+                previewCurrentContext();
+            };
+            actions.append(sendButton, previewButton, clearButton);
+            composer.append(question, actions);
+            view.append(composer);
+            setTimeout(() => { messagesWrap.scrollTop = messagesWrap.scrollHeight; }, 0);
+        }
+
+        function renderLlmContextView() {
+            const view = views.context;
+            if (state.activeTab !== 'context') { return; }
+            view.innerHTML = '';
+            view.style.display = 'flex';
+            view.style.flexDirection = 'column';
+            view.append(buildLlmActiveBar(renderAll));
+            const controls = document.createElement('div');
+            controls.style.cssText = 'display:grid;grid-template-columns:1fr 1fr auto auto;gap:0.56em;align-items:center;margin-bottom:0.62em;';
+            controls.append(
+                buildPlainSelect([
+                    ['untilCurrent', '字幕: 截止当前'],
+                    ['all', '字幕: 整集'],
+                ], lsGetItem(lsKeys.llmSubtitleRange.id), value => lsSetItem(lsKeys.llmSubtitleRange.id, value)),
+                buildPlainSelect([
+                    ['recent2m', '弹幕: 前2分钟'],
+                    ['untilCurrent', '弹幕: 截止当前'],
+                ], lsGetItem(lsKeys.llmDanmakuRange.id), value => lsSetItem(lsKeys.llmDanmakuRange.id, value)),
+            );
+            const commentsLabel = document.createElement('label');
+            commentsLabel.style.cssText = 'display:flex;align-items:center;gap:0.34em;color:rgba(255,255,255,0.72);font-size:0.68em;white-space:nowrap;';
+            const commentsCheckbox = document.createElement('input');
+            commentsCheckbox.type = 'checkbox';
+            commentsCheckbox.checked = !!lsGetItem(lsKeys.llmBangumiComments.id);
+            commentsCheckbox.onchange = () => lsSetItem(lsKeys.llmBangumiComments.id, commentsCheckbox.checked);
+            commentsLabel.append(commentsCheckbox, document.createTextNode('章节讨论'));
+            const previewButton = buildLlmDialogButton('生成预览');
+            previewButton.onclick = previewCurrentContext;
+            controls.append(commentsLabel, previewButton);
+            view.append(controls);
+
+            const preview = document.createElement('textarea');
+            preview.id = 'edeLlmContextPreview';
+            preview.readOnly = true;
+            preview.value = state.lastContext || '点击“生成预览”查看本次会发送给模型的上下文。';
+            preview.style.cssText = 'flex:1;min-height:0;width:100%;resize:none;padding:0.72em;line-height:1.45;font-family:Consolas,monospace;font-size:0.72em;white-space:pre;';
+            view.append(preview);
+        }
+
+        function renderLlmProvidersView() {
+            const view = views.providers;
+            if (state.activeTab !== 'providers') { return; }
+            view.innerHTML = '';
+            view.style.display = 'grid';
+            view.style.gridTemplateColumns = '220px minmax(0,1fr)';
+            view.style.gap = '0.74em';
+            const providers = getLlmProviders();
+            const active = getActiveLlmProvider();
+
+            const list = document.createElement('div');
+            list.className = 'ede-llm-scroll';
+            list.style.cssText = 'overflow-y:auto;min-height:0;padding-right:0.12em;scrollbar-width:none;';
+            providers.forEach(provider => {
+                const button = document.createElement('button');
+                button.textContent = provider.name || provider.baseUrl || '未命名供应商';
+                button.style.cssText = [
+                    'width:100%',
+                    'height:2.55em',
+                    'margin-bottom:0.36em',
+                    'padding:0 0.7em',
+                    'border:0',
+                    'border-radius:7px',
+                    provider.id === active?.id ? 'background:rgba(255,255,255,0.18)' : 'background:rgba(255,255,255,0.08)',
+                    'color:#fff',
+                    'text-align:left',
+                    'white-space:nowrap',
+                    'overflow:hidden',
+                    'text-overflow:ellipsis',
+                    'cursor:pointer',
+                ].join(';');
+                button.onclick = () => {
+                    lsSetItem(lsKeys.llmActiveProviderId.id, provider.id);
+                    renderAll();
+                };
+                list.append(button);
+            });
+            view.append(list);
+
+            const form = document.createElement('div');
+            form.style.cssText = 'min-width:0;display:flex;flex-direction:column;gap:0.58em;';
+            const nameInput = buildLlmTextInput(active?.name || '', '供应商名称');
+            const baseInput = buildLlmTextInput(active?.baseUrl || '', 'https://api.example.com 或 https://api.example.com/v1');
+            const keyInput = buildLlmTextInput(active?.apiKey || '', 'API Key，可留空');
+            keyInput.type = 'password';
+            const modelInput = buildLlmTextInput(active?.model || '', '模型 ID');
+            const temperatureInput = buildLlmTextInput(String(lsGetItem(lsKeys.llmTemperature.id) ?? 0.3), '0 - 1');
+            temperatureInput.type = 'number';
+            temperatureInput.min = '0';
+            temperatureInput.max = '1';
+            temperatureInput.step = '0.1';
+            form.append(
+                buildLlmField('名称', nameInput),
+                buildLlmField('Base URL', baseInput),
+                buildLlmField('API Key', keyInput),
+                buildLlmField('模型', modelInput),
+                buildLlmField('温度', temperatureInput),
+            );
+            const modelWrap = document.createElement('div');
+            modelWrap.style.cssText = 'display:flex;gap:0.48em;align-items:center;flex-wrap:wrap;';
+            const modelSelect = buildPlainSelect(
+                (active?.modelsCache || []).map(model => [model.id || model, model.id || model]),
+                active?.model || '',
+                value => { modelInput.value = value; saveProvider(false); }
+            );
+            modelSelect.style.maxWidth = '24em';
+            if ((active?.modelsCache || []).length > 0) { modelWrap.append(modelSelect); }
+            const saveButton = buildLlmDialogButton('保存');
+            saveButton.onclick = () => saveProvider(true);
+            const refreshButton = buildLlmDialogButton('刷新模型');
+            refreshButton.onclick = refreshProviderModels;
+            const newButton = buildLlmDialogButton('新建');
+            newButton.onclick = () => {
+                const list = getLlmProviders();
+                const provider = normalizeLlmProvider({ id: createLlmId('provider'), name: '新供应商' });
+                list.push(provider);
+                lsSetItem(lsKeys.llmProviders.id, list);
+                lsSetItem(lsKeys.llmActiveProviderId.id, provider.id);
+                renderAll();
+            };
+            const cloneButton = buildLlmDialogButton('复制');
+            cloneButton.onclick = () => {
+                const list = getLlmProviders();
+                const provider = normalizeLlmProvider({ ...active, id: createLlmId('provider'), name: `${active?.name || '供应商'} 副本` });
+                list.push(provider);
+                lsSetItem(lsKeys.llmProviders.id, list);
+                lsSetItem(lsKeys.llmActiveProviderId.id, provider.id);
+                renderAll();
+            };
+            const deleteButton = buildLlmDialogButton('删除');
+            deleteButton.onclick = () => {
+                const next = getLlmProviders().filter(provider => provider.id !== active?.id);
+                lsSetItem(lsKeys.llmProviders.id, next.length ? next : [normalizeLlmProvider({ id: createLlmId('provider'), name: 'OpenAI Compatible' })]);
+                lsSetItem(lsKeys.llmActiveProviderId.id, getLlmProviders()[0]?.id || '');
+                renderAll();
+            };
+            modelWrap.append(saveButton, refreshButton, newButton, cloneButton, deleteButton);
+            form.append(modelWrap);
+            view.append(form);
+
+            function saveProvider(showToast) {
+                const list = getLlmProviders().map(provider => provider.id === active?.id
+                    ? normalizeLlmProvider({
+                        ...provider,
+                        name: nameInput.value.trim() || '未命名供应商',
+                        baseUrl: normalizeLlmBaseUrl(baseInput.value),
+                        apiKey: keyInput.value.trim(),
+                        model: modelInput.value.trim(),
+                    })
+                    : provider);
+                lsSetItem(lsKeys.llmProviders.id, list);
+                lsSetItem(lsKeys.llmTemperature.id, Math.max(0, Math.min(1, Number(temperatureInput.value) || 0)));
+                if (showToast) { setLlmDialogStatus(status, '供应商已保存', 'green'); }
+                renderAll();
+            }
+
+            async function refreshProviderModels() {
+                try {
+                    saveProvider(false);
+                    const provider = getActiveLlmProvider();
+                    const models = await fetchLlmModelsForProvider(provider);
+                    const list = getLlmProviders().map(item => item.id === provider.id ? { ...item, modelsCache: models } : item);
+                    lsSetItem(lsKeys.llmProviders.id, list);
+                    setLlmDialogStatus(status, `模型拉取成功: ${models.length} 个`, 'green');
+                    renderAll();
+                } catch (error) {
+                    logger.error('[LLM请求] 模型拉取失败:', error);
+                    setLlmDialogStatus(status, `模型拉取失败: ${error.message || error}`, 'red');
+                }
+            }
+        }
+
+        function renderLlmPersonasView() {
+            const view = views.personas;
+            if (state.activeTab !== 'personas') { return; }
+            view.innerHTML = '';
+            view.style.display = 'grid';
+            view.style.gridTemplateColumns = '220px minmax(0,1fr)';
+            view.style.gap = '0.74em';
+            const personas = getLlmPersonas();
+            const active = getActiveLlmPersona();
+            const list = document.createElement('div');
+            list.className = 'ede-llm-scroll';
+            list.style.cssText = 'overflow-y:auto;min-height:0;padding-right:0.12em;scrollbar-width:none;';
+            personas.forEach(persona => {
+                const button = document.createElement('button');
+                button.textContent = persona.name || '未命名人设';
+                button.style.cssText = [
+                    'width:100%',
+                    'height:2.55em',
+                    'margin-bottom:0.36em',
+                    'padding:0 0.7em',
+                    'border:0',
+                    'border-radius:7px',
+                    persona.id === active?.id ? 'background:rgba(255,255,255,0.18)' : 'background:rgba(255,255,255,0.08)',
+                    'color:#fff',
+                    'text-align:left',
+                    'cursor:pointer',
+                ].join(';');
+                button.onclick = () => {
+                    lsSetItem(lsKeys.llmActivePersonaId.id, persona.id);
+                    renderAll();
+                };
+                list.append(button);
+            });
+            view.append(list);
+            const form = document.createElement('div');
+            form.style.cssText = 'min-width:0;display:flex;flex-direction:column;gap:0.58em;';
+            const nameInput = buildLlmTextInput(active?.name || '', '人设名称');
+            const promptInput = document.createElement('textarea');
+            promptInput.value = active?.prompt || '';
+            promptInput.placeholder = '系统提示词。留空就是普通助手。';
+            promptInput.style.cssText = 'width:100%;height:18em;resize:vertical;padding:0.72em;line-height:1.45;';
+            form.append(buildLlmField('名称', nameInput), buildLlmField('系统提示词', promptInput));
+            const actions = document.createElement('div');
+            actions.style.cssText = 'display:flex;gap:0.48em;flex-wrap:wrap;';
+            const saveButton = buildLlmDialogButton('保存');
+            saveButton.onclick = () => {
+                const next = getLlmPersonas().map(persona => persona.id === active?.id
+                    ? { ...persona, name: nameInput.value.trim() || '未命名人设', prompt: promptInput.value.trim() }
+                    : persona);
+                lsSetItem(lsKeys.llmPersonas.id, next);
+                setLlmDialogStatus(status, '人设已保存', 'green');
+                renderAll();
+            };
+            const newButton = buildLlmDialogButton('新建');
+            newButton.onclick = () => {
+                const persona = { id: createLlmId('persona'), name: '新人设', prompt: '' };
+                const next = [...getLlmPersonas(), persona];
+                lsSetItem(lsKeys.llmPersonas.id, next);
+                lsSetItem(lsKeys.llmActivePersonaId.id, persona.id);
+                renderAll();
+            };
+            const deleteButton = buildLlmDialogButton('删除');
+            deleteButton.onclick = () => {
+                if (['default', 'production'].includes(active?.id)) {
+                    setLlmDialogStatus(status, '默认人设不删除，可以直接改提示词', '');
+                    return;
+                }
+                const next = getLlmPersonas().filter(persona => persona.id !== active?.id);
+                lsSetItem(lsKeys.llmPersonas.id, next.length ? next : getDefaultLlmPersonas());
+                lsSetItem(lsKeys.llmActivePersonaId.id, 'default');
+                renderAll();
+            };
+            actions.append(saveButton, newButton, deleteButton);
+            form.append(actions);
+            view.append(form);
+        }
+
+        async function sendMessage(question) {
+            const content = question.value.trim();
+            if (!content || state.sending) { return; }
+            state.sending = true;
+            state.messages.push({ role: 'user', content });
+            state.draftQuestion = '';
+            saveLlmAssistantState(state);
+            question.value = '';
+            renderAll();
+            try {
+                setLlmDialogStatus(status, '正在整理字幕、弹幕和 Bangumi 上下文...', '');
+                const context = await buildLlmContext({ includeComments: !!lsGetItem(lsKeys.llmBangumiComments.id) });
+                const history = state.messages.slice(0, -1);
+                const messages = buildLlmChatMessages(context.prompt, content, history);
+                state.lastContext = formatLlmMessagesPreview(messages, { currentQuestionIncluded: true });
+                saveLlmAssistantState(state);
+                setLlmDialogStatus(status, `正在请求模型，上下文 ${context.prompt.length} 字`, '');
+                const answer = await requestLlmChat(context.prompt, content, history);
+                state.messages.push({ role: 'assistant', content: answer });
+                saveLlmAssistantState(state);
+                setLlmDialogStatus(status, `完成，上下文 ${context.prompt.length} 字，字幕 ${context.subtitleCount} 条，弹幕 ${context.danmakuCount} 条`, 'green');
+            } catch (error) {
+                logger.error('[LLM请求] AI 助手失败:', error);
+                state.messages.push({ role: 'assistant', content: `请求失败：${error.message || error}` });
+                saveLlmAssistantState(state);
+                setLlmDialogStatus(status, `失败: ${error.message || error}`, 'red');
+            } finally {
+                state.sending = false;
+                saveLlmAssistantState(state);
+                renderAll();
+            }
+        }
+
+        async function previewCurrentContext() {
+            try {
+                setLlmDialogStatus(status, '正在生成上下文预览...', '');
+                const context = await buildLlmContext({ includeComments: !!lsGetItem(lsKeys.llmBangumiComments.id) });
+                const draftQuestion = String(state.draftQuestion || '').trim();
+                const messages = buildLlmChatMessages(context.prompt, draftQuestion, state.messages, { includeFallbackQuestion: false });
+                state.lastContext = formatLlmMessagesPreview(messages, { currentQuestionIncluded: !!draftQuestion });
+                saveLlmAssistantState(state);
+                const preview = getById('edeLlmContextPreview');
+                if (preview) { preview.value = state.lastContext; }
+                setLlmDialogStatus(status, `上下文 ${context.prompt.length} 字，字幕 ${context.subtitleCount} 条，弹幕 ${context.danmakuCount} 条`, 'green');
+            } catch (error) {
+                logger.error('[LLM上下文] 预览失败:', error);
+                setLlmDialogStatus(status, `上下文失败: ${error.message || error}`, 'red');
+            }
+        }
+    }
+
+    function buildPlainSelect(options, value, onChange) {
+        const select = document.createElement('select');
+        select.style.cssText = 'width:100%;height:2.2em;padding:0 0.45em;';
+        (options || []).forEach(([id, name]) => {
+            const opt = document.createElement('option');
+            opt.value = id;
+            opt.textContent = name;
+            opt.selected = id === value;
+            select.append(opt);
+        });
+        select.onchange = () => onChange(select.value);
+        return select;
+    }
+
+    function createLlmView(parent) {
+        const view = document.createElement('div');
+        view.className = 'ede-llm-scroll';
+        view.style.cssText = [
+            'position: absolute',
+            'inset: 0',
+            'padding: 0.82em',
+            'box-sizing: border-box',
+            'overflow-y: auto',
+            'scrollbar-width: none',
+            '-ms-overflow-style: none',
+        ].join(';');
+        parent.append(view);
+        return view;
+    }
+
+    function bindLlmDialogKeyboardIsolation(dialog) {
+        const stop = event => {
+            event.stopPropagation();
+        };
+        ['keydown', 'keyup', 'keypress'].forEach(type => {
+            dialog.addEventListener(type, stop);
+        });
+    }
+
+    function buildLlmTabStyle(active) {
+        return [
+            'height: 2em',
+            'padding: 0 0.78em',
+            'border: 0',
+            'border-radius: 7px',
+            active ? 'background: rgba(255,255,255,0.18)' : 'background: rgba(255,255,255,0.07)',
+            active ? 'color: rgba(255,255,255,0.96)' : 'color: rgba(255,255,255,0.62)',
+            'cursor: pointer',
+            'font-size: 0.72em',
+            'font-weight: 720',
+        ].join(';');
+    }
+
+    function buildLlmDialogButton(text) {
+        const button = document.createElement('button');
+        button.textContent = text;
+        button.style.cssText = 'height:2.25em;padding:0 0.85em;border:0;border-radius:7px;background:rgba(255,255,255,0.13);color:#fff;cursor:pointer;font-size:0.72em;font-weight:700;';
+        return button;
+    }
+
+    function getLlmAssistantState() {
+        if (window.ede?.llmAssistantState) { return window.ede.llmAssistantState; }
+        let restored = null;
+        try {
+            restored = JSON.parse(localStorage.getItem('ede_llm_assistant_state_v1') || 'null');
+        } catch (error) {
+            restored = null;
+        }
+        const state = {
+            activeTab: restored?.activeTab || 'chat',
+            messages: Array.isArray(restored?.messages) ? restored.messages.slice(-40) : [],
+            sending: false,
+            lastContext: restored?.lastContext || '',
+            draftQuestion: restored?.draftQuestion || '',
+        };
+        window.ede.llmAssistantState = state;
+        return state;
+    }
+
+    function saveLlmAssistantState(state) {
+        if (!state) { return; }
+        state.messages = (Array.isArray(state.messages) ? state.messages : []).slice(-40);
+        if (window.ede) { window.ede.llmAssistantState = state; }
+        try {
+            localStorage.setItem('ede_llm_assistant_state_v1', JSON.stringify({
+                activeTab: state.activeTab || 'chat',
+                messages: state.messages,
+                lastContext: state.lastContext || '',
+                draftQuestion: state.draftQuestion || '',
+            }));
+        } catch (error) {
+            logger.debug('[LLM请求] 对话状态保存失败', error.message || error);
+        }
+    }
+
+    function buildLlmActiveBar(onChange) {
+        const provider = getActiveLlmProvider();
+        const persona = getActiveLlmPersona();
+        const bar = document.createElement('div');
+        bar.style.cssText = [
+            'margin-bottom: 0.62em',
+            'padding: 0.54em 0.62em',
+            'display: grid',
+            'grid-template-columns: minmax(0,1.1fr) minmax(0,1fr)',
+            'gap: 0.54em',
+            'align-items: center',
+            'border-radius: 8px',
+            'background: rgba(255,255,255,0.07)',
+            'box-shadow: inset 0 0 0 1px rgba(255,255,255,0.055)',
+        ].join(';');
+
+        const providerSelect = buildPlainSelect(
+            getLlmProviders().map(item => [item.id, `供应商: ${item.name || item.baseUrl || '未命名'}${item.model ? ` / ${item.model}` : ''}`]),
+            provider?.id || '',
+            value => {
+                lsSetItem(lsKeys.llmActiveProviderId.id, value);
+                onChange && onChange();
+            }
+        );
+        const personaSelect = buildPlainSelect(
+            getLlmPersonas().map(item => [item.id, `人设: ${item.name || '未命名'}`]),
+            persona?.id || '',
+            value => {
+                lsSetItem(lsKeys.llmActivePersonaId.id, value);
+                onChange && onChange();
+            }
+        );
+        providerSelect.style.height = '2.25em';
+        personaSelect.style.height = '2.25em';
+        bar.append(providerSelect, personaSelect);
+        return bar;
+    }
+
+    function buildLlmTextInput(value, placeholder) {
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.value = value || '';
+        input.placeholder = placeholder || '';
+        input.style.cssText = 'width:100%;height:2.4em;padding:0 0.66em;';
+        return input;
+    }
+
+    function buildLlmField(labelText, input) {
+        const wrap = document.createElement('label');
+        wrap.style.cssText = 'display:block;color:rgba(255,255,255,0.62);font-size:0.68em;';
+        const label = document.createElement('div');
+        label.textContent = labelText;
+        label.style.cssText = 'margin-bottom:0.32em;font-weight:720;';
+        wrap.append(label, input);
+        return wrap;
+    }
+
+    function setLlmDialogStatus(status, text, color = '') {
+        if (!status) { return; }
+        status.textContent = text || '';
+        status.style.color = color === 'red' ? '#ff9d9d' : (color === 'green' ? '#8fe2a1' : 'rgba(255,255,255,0.50)');
+    }
+
+    function renderLlmEmptyChat() {
+        const empty = document.createElement('div');
+        empty.style.cssText = [
+            'height: 100%',
+            'min-height: 10em',
+            'display: flex',
+            'align-items: center',
+            'justify-content: center',
+            'color: rgba(255,255,255,0.38)',
+            'font-size: 0.78em',
+            'text-align: center',
+        ].join(';');
+        empty.textContent = '可以直接问当前剧情、弹幕梗、角色、制作人员和 Bangumi 章节讨论。';
+        return empty;
+    }
+
+    function renderLlmMessage(message) {
+        const row = document.createElement('div');
+        const isUser = message.role === 'user';
+        row.style.cssText = [
+            'display: flex',
+            isUser ? 'justify-content: flex-end' : 'justify-content: flex-start',
+            'margin: 0.42em 0',
+        ].join(';');
+        const bubble = document.createElement('div');
+        bubble.className = 'ede-llm-md';
+        bubble.style.cssText = [
+            'max-width: 82%',
+            'padding: 0.66em 0.76em',
+            'border-radius: 9px',
+            isUser ? 'background: rgba(72,126,206,0.32)' : 'background: rgba(255,255,255,0.095)',
+            'box-shadow: inset 0 0 0 1px rgba(255,255,255,0.055)',
+            'color: rgba(255,255,255,0.88)',
+            'font-size: 0.76em',
+            'line-height: 1.48',
+            'word-break: break-word',
+        ].join(';');
+        bubble.innerHTML = renderLlmMarkdown(message.content || '');
+        if (!isUser) {
+            const copy = document.createElement('button');
+            copy.textContent = '复制';
+            copy.style.cssText = 'margin-top:0.44em;height:1.9em;padding:0 0.55em;border:0;border-radius:6px;background:rgba(255,255,255,0.12);color:rgba(255,255,255,0.76);font-size:0.82em;cursor:pointer;';
+            copy.onclick = () => navigator.clipboard?.writeText(message.content || '');
+            bubble.append(copy);
+        }
+        row.append(bubble);
+        return row;
+    }
+
+    function renderLlmMarkdown(markdown) {
+        const source = String(markdown || '').replace(/\r\n/g, '\n');
+        const codeBlocks = [];
+        const imageBlocks = [];
+        let text = source.replace(/```([\s\S]*?)```/g, (_, code) => {
+            const token = `@@LLM_CODE_${codeBlocks.length}@@`;
+            codeBlocks.push(`<pre><code>${escapeLlmHtml(code.replace(/^\w+\n/, '').trim())}</code></pre>`);
+            return token;
+        });
+        text = text.replace(/<img\b[^>]*>/gi, tag => {
+            const imageHtml = sanitizeLlmImageTag(tag);
+            if (!imageHtml) { return tag; }
+            const token = `@@LLM_IMG_${imageBlocks.length}@@`;
+            imageBlocks.push(imageHtml);
+            return token;
+        });
+        const inlineCodeBlocks = [];
+        text = text.replace(/`([^`\n]+)`/g, (_, code) => {
+            const token = `@@LLM_INLINE_${inlineCodeBlocks.length}@@`;
+            inlineCodeBlocks.push(renderLlmInlineCode(code));
+            return token;
+        });
+        text = escapeLlmHtml(text)
+            .replace(/^&gt;\s?(.*)$/gm, '<blockquote>$1</blockquote>')
+            .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+            .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" style="color:#9ec9ff;">$1</a>');
+        const blocks = text.split(/\n{2,}/).map(block => block.trim()).filter(Boolean).map(block => {
+            if (/^@@LLM_CODE_\d+@@$/.test(block)) { return block; }
+            if (/^(?:[-*]\s.+\n?)+$/m.test(block)) {
+                const items = block.split('\n').map(line => line.replace(/^[-*]\s*/, '').trim()).filter(Boolean);
+                return `<ul>${items.map(item => `<li>${item}</li>`).join('')}</ul>`;
+            }
+            return `<p>${block.replace(/\n/g, '<br>')}</p>`;
+        }).join('');
+        return blocks
+            .replace(/@@LLM_CODE_(\d+)@@/g, (_, index) => codeBlocks[Number(index)] || '')
+            .replace(/@@LLM_INLINE_(\d+)@@/g, (_, index) => inlineCodeBlocks[Number(index)] || '')
+            .replace(/@@LLM_IMG_(\d+)@@/g, (_, index) => imageBlocks[Number(index)] || '');
+    }
+
+    function renderLlmInlineCode(code) {
+        const raw = String(code || '').trim();
+        const entity = findLlmEntity(raw);
+        if (!entity) { return `<code>${escapeLlmHtml(raw)}</code>`; }
+        const image = entity.image
+            ? `<img src="${escapeLlmHtml(entity.image)}" alt="" style="width:1.55em;height:1.55em;object-fit:cover;object-position:center top;border-radius:5px;margin-right:0.34em;flex:none;">`
+            : '';
+        const typeLabel = entity.typeLabel || entity.type || '';
+        const title = [entity.name, typeLabel, entity.subtitle].filter(Boolean).join(' / ');
+        const content = [
+            '<span class="ede-llm-entity-chip" ',
+            `title="${escapeLlmHtml(title)}" `,
+            entity.url ? `onclick="window.open('${escapeLlmHtml(entity.url)}','_blank')" ` : '',
+            'style="display:inline-flex;align-items:center;max-width:16em;vertical-align:middle;',
+            'padding:0.12em 0.42em 0.12em 0.18em;margin:0 0.08em;border-radius:7px;',
+            'background:rgba(255,255,255,0.13);box-shadow:inset 0 0 0 1px rgba(255,255,255,0.12);',
+            'color:rgba(255,255,255,0.92);font-weight:720;cursor:pointer;">',
+            image,
+            `<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeLlmHtml(entity.name || raw)}</span>`,
+            '</span>',
+        ].join('');
+        return content;
+    }
+
+    function sanitizeLlmImageTag(tag) {
+        const src = String(tag || '').match(/\bsrc\s*=\s*["']([^"']+)["']/i)?.[1] || '';
+        const widthRaw = String(tag || '').match(/\bwidth\s*=\s*["']?(\d{1,3})["']?/i)?.[1] || '56';
+        const width = Math.max(24, Math.min(120, Number(widthRaw) || 56));
+        if (!/^https:\/\/files\.catbox\.moe\/[A-Za-z0-9_-]+\.(png|jpg|jpeg|gif|webp)$/i.test(src)) {
+            return '';
+        }
+        return `<img src="${escapeLlmHtml(src)}" width="${width}" style="max-width:${width}px;height:auto;vertical-align:middle;border-radius:6px;margin:0 0.12em;">`;
+    }
+
+    function resetLlmEntityIndex() {
+        if (!window.ede) { return; }
+        window.ede.llmEntityIndex = new Map();
+    }
+
+    function addLlmEntity(entity) {
+        if (!window.ede) { return; }
+        if (!window.ede.llmEntityIndex || !(window.ede.llmEntityIndex instanceof Map)) {
+            window.ede.llmEntityIndex = new Map();
+        }
+        const names = uniqueLlmTextList([entity?.name, ...(entity?.aliases || [])]);
+        if (names.length < 1) { return; }
+        const normalized = {
+            type: entity.type || 'entity',
+            typeLabel: entity.typeLabel || '',
+            name: entity.name || names[0],
+            subtitle: entity.subtitle || '',
+            image: pickLlmImage(entity.images) || entity.image || '',
+            url: entity.url || '',
+        };
+        names.forEach(name => {
+            const key = normalizeLlmEntityName(name);
+            if (!key) { return; }
+            const old = window.ede.llmEntityIndex.get(key);
+            if (!old || getLlmEntityPriority(normalized) >= getLlmEntityPriority(old)) {
+                window.ede.llmEntityIndex.set(key, normalized);
+            }
+        });
+    }
+
+    function findLlmEntity(name) {
+        const index = window.ede?.llmEntityIndex;
+        if (!index || !(index instanceof Map)) { return null; }
+        const raw = String(name || '').trim();
+        const candidates = uniqueLlmTextList([
+            raw,
+            raw.replace(/^(角色名|声优名|动画公司|动画标题|制作人员|公司)[:：]\s*/i, ''),
+            raw.replace(/^《(.+)》$/, '$1'),
+        ]).map(normalizeLlmEntityName).filter(Boolean);
+        for (const key of candidates) {
+            const exact = index.get(key);
+            if (exact) { return exact; }
+        }
+        if (candidates[0] && candidates[0].length >= 3) {
+            for (const [key, entity] of index.entries()) {
+                if (key.includes(candidates[0]) || candidates[0].includes(key)) { return entity; }
+            }
+        }
+        return null;
+    }
+
+    function normalizeLlmEntityName(name) {
+        return String(name || '')
+            .replace(/[《》「」『』【】\[\]()（）]/g, '')
+            .replace(/\s+/g, '')
+            .replace(/[・･·•]/g, '·')
+            .toLowerCase()
+            .trim();
+    }
+
+    function getLlmEntityPriority(entity) {
+        return ({ company: 5, character: 4, actor: 3, person: 2, anime: 1 }[entity?.type]) || 0;
+    }
+
+    function pickLlmImage(images) {
+        if (!images) { return ''; }
+        if (typeof images === 'string') { return images; }
+        return images.medium || images.grid || images.large || images.common || images.small || '';
+    }
+
+    function escapeLlmHtml(value) {
+        return String(value ?? '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
+    async function buildLlmContext({ includeComments = false } = {}) {
+        const currentTime = await getCurrentPlaybackSeconds();
+        const item = await getFullCurrentItemForLlm();
+        const episodeInfo = window.ede?.episode_info || await getEpisodeInfo(false).catch(() => null);
+        const persona = getActiveLlmPersona();
+        resetLlmEntityIndex();
+        const bangumi = await getLlmBangumiContext(episodeInfo, includeComments).catch(error => {
+            logger.warn('[LLM上下文] Bangumi 信息读取失败:', error.message || error);
+            return { text: 'Bangumi 信息读取失败。', commentCount: 0 };
+        });
+        const subtitles = await getLlmSubtitleContext(item, currentTime, lsGetItem(lsKeys.llmSubtitleRange.id)).catch(error => {
+            logger.warn('[LLM字幕] 字幕读取失败:', error.message || error);
+            return { text: '字幕读取失败。', count: 0 };
+        });
+        const danmaku = getLlmDanmakuContext(currentTime, lsGetItem(lsKeys.llmDanmakuRange.id));
+
+        const playbackText = [
+            `标题: ${item?.SeriesName || item?.Name || episodeInfo?.animeTitle || '未知'}`,
+            `分集: ${episodeInfo?.episodeTitle || item?.Name || ''}`,
+            `Emby Item ID: ${item?.Id || ''}`,
+            item?.ProviderIds ? `Emby ProviderIds: ${JSON.stringify(item.ProviderIds)}` : '',
+            item?.ExternalUrls ? `Emby ExternalUrls: ${JSON.stringify(item.ExternalUrls)}` : '',
+            `当前时间: ${formatLlmTime(currentTime)}`,
+            `字幕范围: ${lsGetItem(lsKeys.llmSubtitleRange.id) === 'all' ? '整集' : '截止当前时间'}`,
+            `弹幕范围: ${lsGetItem(lsKeys.llmDanmakuRange.id) === 'untilCurrent' ? '截止当前时间' : '当前前2分钟'}`,
+        ].filter(Boolean).join('\n');
+
+        const prompt = [
+            '<人设Prompt>',
+            persona?.prompt || '无额外人设 prompt。',
+            '</人设Prompt>',
+            '',
+            '<播放信息>',
+            playbackText,
+            '</播放信息>',
+            '',
+            bangumi.text,
+            '',
+            '<字幕>',
+            subtitles.text,
+            '</字幕>',
+            '',
+            '<弹幕>',
+            danmaku.text,
+            '</弹幕>',
+        ].join('\n');
+
+        logger.info(`[LLM上下文] prompt=${prompt.length} 字, subtitle=${subtitles.count}, danmaku=${danmaku.count}, bgmComments=${bangumi.commentCount}`);
+        return {
+            prompt,
+            subtitleCount: subtitles.count,
+            danmakuCount: danmaku.count,
+            bangumiCommentCount: bangumi.commentCount,
+        };
+    }
+
+    async function requestLlmChat(contextPrompt, userQuestion, history = []) {
+        const provider = getActiveLlmProvider();
+        const baseUrl = normalizeLlmBaseUrl(provider?.baseUrl || '');
+        const apiKey = provider?.apiKey || '';
+        const model = provider?.model || '';
+        if (!baseUrl) { throw new Error('未配置 LLM Base URL'); }
+        if (!model) { throw new Error('未配置 LLM 模型'); }
+        const messages = buildLlmChatMessages(contextPrompt, userQuestion, history);
+        const body = {
+            model,
+            temperature: Number(lsGetItem(lsKeys.llmTemperature.id) ?? 0.3),
+            messages,
+        };
+        logger.info(`[LLM请求] chat/completions model=${model}, prompt=${contextPrompt.length}, question=${(userQuestion || '').length}, messages=${messages.length}`);
+        const response = await fetch(`${baseUrl}/chat/completions`, {
+            method: 'POST',
+            headers: buildLlmHeaders(apiKey),
+            body: JSON.stringify(body),
+        });
+        const text = await response.text();
+        if (!response.ok) {
+            logger.error('[LLM请求] 响应失败:', response.status, text.slice(0, 500));
+            throw new Error(`LLM HTTP ${response.status}`);
+        }
+        let data;
+        try {
+            data = JSON.parse(text);
+        } catch (error) {
+            logger.error('[LLM请求] JSON 解析失败:', text.slice(0, 500));
+            throw error;
+        }
+        const answer = data?.choices?.[0]?.message?.content || data?.choices?.[0]?.text || '';
+        if (!answer) { throw new Error('LLM 返回为空'); }
+        return answer;
+    }
+
+    function buildLlmChatMessages(contextPrompt, userQuestion, history = [], options = {}) {
+        const includeFallbackQuestion = options.includeFallbackQuestion !== false;
+        const messages = [
+            { role: 'system', content: contextPrompt },
+        ];
+        (Array.isArray(history) ? history.slice(-8) : []).forEach(message => {
+            if (['user', 'assistant'].includes(message?.role) && message?.content) {
+                messages.push({ role: message.role, content: message.content });
+            }
+        });
+        const question = String(userQuestion || '').trim();
+        if (question || includeFallbackQuestion) {
+            messages.push({ role: 'user', content: question || '解释当前场景。' });
+        }
+        return messages;
+    }
+
+    function formatLlmMessagesPreview(messages, { currentQuestionIncluded = false } = {}) {
+        const safeMessages = Array.isArray(messages) ? messages : [];
+        const lastIndex = safeMessages.length - 1;
+        const blocks = ['<实际请求Payload>'];
+        safeMessages.forEach((message, index) => {
+            const role = message?.role || 'unknown';
+            const source = index === 0
+                ? 'system-context'
+                : (currentQuestionIncluded && index === lastIndex ? 'current-question' : 'chat-history');
+            blocks.push(`<message role="${role}" source="${source}">`);
+            blocks.push(String(message?.content || ''));
+            blocks.push('</message>');
+            blocks.push('');
+        });
+        if (!currentQuestionIncluded) {
+            blocks.push('<当前用户问题>');
+            blocks.push('未填写。发送时会使用聊天输入框里的问题；这里不会凭空加入旧问题。');
+            blocks.push('</当前用户问题>');
+            blocks.push('');
+        }
+        blocks.push('</实际请求Payload>');
+        return blocks.join('\n').trim();
+    }
+
+    async function getCurrentPlaybackSeconds() {
+        const media = document.querySelector(mediaQueryStr);
+        if (media && Number.isFinite(media.currentTime)) { return Math.max(0, media.currentTime); }
+        try {
+            const playbackManager = await new Promise(resolve => require(['playbackManager'], resolve));
+            const player = playbackManager.getCurrentPlayer();
+            return Math.max(0, (playbackManager.currentTime(player) || 0) / 10000000);
+        } catch (error) {
+            logger.warn('[LLM上下文] 当前播放时间读取失败:', error.message || error);
+            return 0;
+        }
+    }
+
+    async function getFullCurrentItemForLlm() {
+        let item = await getEmbyItemInfo();
+        if (!item && window.ede?.itemId) { item = await fatchEmbyItemInfo(window.ede.itemId); }
+        if (item?.Id && (!item.MediaSources || item.MediaSources.length < 1)) {
+            item = await fatchEmbyItemInfo(item.Id);
+        }
+        return item;
+    }
+
+    function getLlmDanmakuContext(currentTime, range) {
+        const all = Array.isArray(window.ede?.commentsParsed) ? window.ede.commentsParsed : [];
+        const start = range === 'untilCurrent' ? 0 : Math.max(0, currentTime - 120);
+        const end = range === 'untilCurrent' ? currentTime : currentTime;
+        const comments = all
+            .filter(comment => Number(comment.time) >= start && Number(comment.time) <= end)
+            .sort((a, b) => Number(a.time) - Number(b.time))
+            .slice(range === 'untilCurrent' ? -1800 : -600);
+        const text = comments.length
+            ? comments.map(comment => `${formatLlmTime(comment.time)} ${String(comment.text || '').trim()}`).join('\n')
+            : '无可用弹幕。';
+        logger.info(`[LLM上下文] 弹幕范围 ${formatLlmTime(start)}-${formatLlmTime(end)}, 数量=${comments.length}`);
+        return { text, count: comments.length };
+    }
+
+    async function getLlmBangumiContext(episodeInfo, includeComments) {
+        if (!episodeInfo) { return { text: '未获取到当前章节信息。', commentCount: 0 }; }
+        const bangumiInfo = await getEpisodeBangumiRel(episodeInfo);
+        const subject = bangumiInfo.subjectId ? await fetchJson(bangumiApi.getSubject(bangumiInfo.subjectId), { timeoutMs: 12000 }).catch(() => null) : null;
+        const episode = bangumiInfo.bgmEpisodeId ? await fetchJson(bangumiApi.getEpisodeById(bangumiInfo.bgmEpisodeId), { timeoutMs: 12000 }).catch(() => null) : null;
+        if (subject || bangumiInfo.subjectId) {
+            addLlmEntity({
+                type: 'anime',
+                typeLabel: '动画',
+                name: subject?.name_cn || bangumiInfo.subjectNameCn || subject?.name || bangumiInfo.subjectName || '',
+                aliases: [subject?.name, subject?.name_cn, bangumiInfo.subjectName, bangumiInfo.subjectNameCn],
+                images: subject?.images,
+                url: bangumiInfo.subjectId ? `https://bgm.tv/subject/${bangumiInfo.subjectId}` : '',
+            });
+        }
+        const characters = bangumiInfo.subjectId ? await getLlmCharactersContext(bangumiInfo.subjectId).catch(error => {
+            logger.warn('[LLM上下文] 角色信息读取失败:', error.message || error);
+            return '角色信息读取失败。';
+        }) : '';
+        const production = bangumiInfo.subjectId ? await getLlmProductionContext(bangumiInfo.subjectId).catch(error => {
+            logger.warn('[LLM上下文] 制作信息读取失败:', error.message || error);
+            return '制作信息读取失败。';
+        }) : '';
+        const lines = [
+            '<Bangumi作品>',
+            `作品: ${bangumiInfo.subjectNameCn || bangumiInfo.subjectName || bangumiInfo.subjectId || ''}`,
+            `Subject ID: ${bangumiInfo.subjectId || ''}`,
+            `Episode ID: ${bangumiInfo.bgmEpisodeId || ''}`,
+            subject ? `原名/中文名: ${subject.name || ''} / ${subject.name_cn || ''}` : '',
+            subject?.date ? `放送日期: ${subject.date}` : '',
+            subject?.rating ? `Bangumi评分: ${subject.rating.score || '—'} / ${subject.rating.total || 0} 人评价` : '',
+            subject?.rank ? `Bangumi排名: ${subject.rank}` : '',
+            Array.isArray(subject?.tags) ? `标签: ${subject.tags.slice(0, 30).map(tag => `${tag.name}(${tag.count})`).join('、')}` : '',
+            subject?.summary ? `作品简介: ${cleanLlmText(subject.summary)}` : '',
+            `本集: ${episode?.name_cn || episode?.name || episodeInfo.episodeTitle || ''}`,
+            episode?.desc ? `简介: ${cleanLlmText(episode.desc)}` : '',
+            '</Bangumi作品>',
+            '',
+            '<角色信息>',
+            characters,
+            '</角色信息>',
+            '',
+            '<制作信息>',
+            production,
+            '</制作信息>',
+        ].filter(Boolean);
+        let commentCount = 0;
+        if (includeComments && bangumiInfo.bgmEpisodeId) {
+            try {
+                const comments = normalizeLlmBangumiComments(await fetchJson(bangumiApi.getEpisodeComments(bangumiInfo.bgmEpisodeId), { timeoutMs: 12000 }));
+                commentCount = comments.length;
+                lines.push('<章节讨论>');
+                lines.push(comments.map(comment => `${comment.userName} ${comment.timeText}\n${comment.content}`).join('\n---\n') || '无章节讨论。');
+                lines.push('</章节讨论>');
+            } catch (error) {
+                logger.warn('[LLM上下文] Bangumi 章节讨论读取失败:', error.message || error);
+                lines.push('<章节讨论>\n章节讨论读取失败。\n</章节讨论>');
+            }
+        }
+        return { text: lines.join('\n'), commentCount };
+    }
+
+    async function getLlmCharactersContext(subjectId) {
+        const characters = await fetchJson(bangumiApi.getCharacters(subjectId), { timeoutMs: 12000 });
+        const sorted = sortLlmCharacters(characters);
+        const detailTargets = sorted.slice(0, 18);
+        const details = await mapLimitLlm(detailTargets, 3, character => getLlmCharacterDetailCached(character.id));
+        const detailById = new Map();
+        details.forEach((detail, index) => detail && detailById.set(detailTargets[index].id, detail));
+        const lines = [];
+        sorted.forEach((character, index) => {
+            const detail = detailById.get(character.id);
+            const actor = Array.isArray(character.actors) ? character.actors[0] : null;
+            const name = getLlmDisplayName(character, detail);
+            addLlmEntity({
+                type: 'character',
+                typeLabel: '角色',
+                name,
+                aliases: [character.name, character.name_cn, detail?.name, detail?.name_cn],
+                images: detail?.images || character.images,
+                subtitle: actor?.name ? `CV: ${actor.name}` : '',
+                url: character.id ? `https://bgm.tv/character/${character.id}` : '',
+            });
+            if (actor?.name) {
+                addLlmEntity({
+                    type: 'actor',
+                    typeLabel: '声优',
+                    name: actor.name,
+                    aliases: [actor.name_cn],
+                    images: actor.images,
+                    subtitle: `饰 ${name}`,
+                    url: actor.id ? `https://bgm.tv/person/${actor.id}` : '',
+                });
+            }
+            const meta = [
+                character.relation,
+                getLlmInfoboxValue(detail, '性别'),
+                getLlmInfoboxValue(detail, '生日'),
+                getLlmInfoboxValue(detail, ['身高', '身長']),
+            ].filter(Boolean).join(' / ');
+            const summary = detail?.summary ? ` - ${cleanLlmText(detail.summary).slice(0, 320)}` : '';
+            lines.push(`${index + 1}. ${name}${character.name && character.name !== name ? ` (${character.name})` : ''}${actor?.name ? ` | CV: ${actor.name}` : ''}${meta ? ` | ${meta}` : ''}${summary}`);
+        });
+        logger.info(`[LLM上下文] 角色=${sorted.length}, 详情=${details.filter(Boolean).length}`);
+        return lines.join('\n') || '无角色信息。';
+    }
+
+    async function getLlmProductionContext(subjectId) {
+        const persons = await getLlmSubjectPersonsCached(subjectId);
+        const sections = buildLlmCoreStaffSections(persons);
+        const rows = sections.flatMap(section => section.rows);
+        const analysisTargets = rows.slice(0, 18);
+        await mapLimitLlm(analysisTargets, 2, row => analyzeLlmStaffRow(row, subjectId));
+        const lines = [];
+        sections.forEach(section => {
+            if (section.rows.length < 1) { return; }
+            lines.push(`【${section.group.label}】`);
+            section.rows.forEach(row => {
+                const detail = row.personDetail;
+                const personName = getLlmPersonDisplayName(row.person, detail);
+                const isCompany = row.group.id === 'animation' || row.person?.type === 2 || detail?.type === 2;
+                addLlmEntity({
+                    type: isCompany ? 'company' : 'person',
+                    typeLabel: isCompany ? '动画公司' : '制作人员',
+                    name: personName,
+                    aliases: [row.person?.name, row.person?.name_cn, detail?.name, detail?.name_cn],
+                    images: detail?.images || row.person?.images,
+                    subtitle: row.relations.join(' / '),
+                    url: row.person?.id ? `https://bgm.tv/person/${row.person.id}` : '',
+                });
+                const score = row.analysis?.score ? `${row.analysis.score.toFixed(1)}分` : '暂无评分';
+                const accidentBase = Number(row.analysis?.coreCount || 0);
+                const accident = accidentBase ? `核心翻车概率${Math.round((row.analysis.accidentCount / accidentBase) * 100)}%` : '核心样本不足';
+                const summary = detail?.summary ? ` 简介: ${cleanLlmText(detail.summary).slice(0, 240)}` : '';
+                const topWorks = Array.isArray(row.analysis?.works)
+                    ? row.analysis.works.slice(0, 6).map(work => `${work.title}(${work.rawScore.toFixed(1)}/${work.total})`).join('、')
+                    : '';
+                const problemWorks = Array.isArray(row.analysis?.problemWorks)
+                    ? row.analysis.problemWorks.slice(0, 4).map(work => `${work.title}(${work.rawScore.toFixed(1)}/${work.total}; ${work.role})`).join('、')
+                    : '';
+                lines.push(`- ${personName} | ${row.relations.join(' / ')} | ${score} | ${accident}${summary}${topWorks ? ` | 高分代表作: ${topWorks}` : ''}${problemWorks ? ` | 核心低分作品: ${problemWorks}` : ''}`);
+            });
+        });
+        logger.info(`[LLM上下文] 制作岗位=${rows.length}, 已评分=${rows.filter(row => row.analysis?.score).length}`);
+        return lines.join('\n') || '无制作信息。';
+    }
+
+    function normalizeLlmBangumiComments(comments) {
+        return (Array.isArray(comments) ? comments : [])
+            .filter(comment => comment?.state !== 6 && String(comment?.content || '').trim())
+            .map(comment => ({
+                userName: comment.user?.nickname || comment.user?.username || '匿名',
+                createdAt: Number(comment.createdAt || 0),
+                timeText: formatLlmDate(comment.createdAt),
+                content: cleanLlmCommentContent(comment.content),
+            }))
+            .sort((a, b) => b.createdAt - a.createdAt);
+    }
+
+    function getDefaultLlmPersonas() {
+        return [
+            {
+                id: 'default',
+                name: '普通助手',
+                prompt: '基于上下文直接回答。不要编造 Bangumi、字幕或弹幕里没有的信息；不要剧透字幕范围之外的剧情。',
+            },
+            {
+                id: 'production',
+                name: '动画考据 / 制作厨分析',
+                prompt: [
+                    '回答时更重视 Bangumi 资料、角色关系、制作人员、动画公司、评分样本、弹幕语境和章节讨论。',
+                    '可以指出监督、脚本、系列构成、作画、OP/ED、动画制作公司的历史表现与本集观感之间的联系。',
+                    '不要把推测说成事实；资料不足时明确说“上下文里没有证据”。不要剧透字幕范围之外的剧情。',
+                ].join('\n'),
+            },
+        ];
+    }
+
+    function ensureLlmPersonas() {
+        const personas = lsGetItem(lsKeys.llmPersonas.id);
+        if (Array.isArray(personas) && personas.length > 0) { return personas; }
+        const defaults = getDefaultLlmPersonas();
+        lsSetItem(lsKeys.llmPersonas.id, defaults);
+        if (!lsGetItem(lsKeys.llmActivePersonaId.id)) {
+            lsSetItem(lsKeys.llmActivePersonaId.id, defaults[0].id);
+        }
+        return defaults;
+    }
+
+    function getLlmPersonas() {
+        const personas = ensureLlmPersonas();
+        const defaults = getDefaultLlmPersonas();
+        const byId = new Map((Array.isArray(personas) ? personas : []).map(persona => [persona.id, persona]));
+        defaults.forEach(persona => {
+            if (!byId.has(persona.id)) { byId.set(persona.id, persona); }
+        });
+        const merged = Array.from(byId.values()).map(persona => ({
+            id: persona.id || createLlmId('persona'),
+            name: persona.name || '未命名人设',
+            prompt: persona.prompt || '',
+        }));
+        return merged;
+    }
+
+    function getActiveLlmPersona() {
+        const personas = getLlmPersonas();
+        const activeId = lsGetItem(lsKeys.llmActivePersonaId.id) || 'default';
+        return personas.find(persona => persona.id === activeId) || personas[0];
+    }
+
+    function ensureLlmProviders() {
+        const providers = lsGetItem(lsKeys.llmProviders.id);
+        if (Array.isArray(providers) && providers.length > 0) {
+            const normalized = providers.map(normalizeLlmProvider);
+            if (JSON.stringify(normalized) !== JSON.stringify(providers)) {
+                lsSetItem(lsKeys.llmProviders.id, normalized);
+            }
+            if (!normalized.some(provider => provider.id === lsGetItem(lsKeys.llmActiveProviderId.id))) {
+                lsSetItem(lsKeys.llmActiveProviderId.id, normalized[0].id);
+            }
+            return normalized;
+        }
+        const legacy = normalizeLlmProvider({
+            id: 'default',
+            name: (lsGetItem(lsKeys.llmBaseUrl.id) || lsGetItem(lsKeys.llmModel.id)) ? '默认供应商' : 'OpenAI Compatible',
+            baseUrl: lsGetItem(lsKeys.llmBaseUrl.id),
+            apiKey: lsGetItem(lsKeys.llmApiKey.id),
+            model: lsGetItem(lsKeys.llmModel.id),
+            modelsCache: lsGetItem(lsKeys.llmModelsCache.id),
+        });
+        lsSetItem(lsKeys.llmProviders.id, [legacy]);
+        lsSetItem(lsKeys.llmActiveProviderId.id, legacy.id);
+        return [legacy];
+    }
+
+    function getLlmProviders() {
+        return ensureLlmProviders();
+    }
+
+    function getActiveLlmProvider() {
+        const providers = getLlmProviders();
+        const activeId = lsGetItem(lsKeys.llmActiveProviderId.id);
+        return providers.find(provider => provider.id === activeId) || providers[0];
+    }
+
+    function normalizeLlmProvider(provider) {
+        const id = provider?.id || createLlmId('provider');
+        return {
+            id,
+            name: provider?.name || 'OpenAI Compatible',
+            baseUrl: normalizeLlmBaseUrl(provider?.baseUrl || ''),
+            apiKey: provider?.apiKey || '',
+            model: provider?.model || '',
+            modelsCache: (Array.isArray(provider?.modelsCache) ? provider.modelsCache : [])
+                .map(model => typeof model === 'string' ? { id: model } : { id: model?.id || model?.name || '' })
+                .filter(model => model.id),
+        };
+    }
+
+    function createLlmId(prefix) {
+        return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+    }
+
+    async function fetchLlmModelsForProvider(provider) {
+        const baseUrl = normalizeLlmBaseUrl(provider?.baseUrl || '');
+        if (!baseUrl) { throw new Error('未配置 Base URL'); }
+        const response = await fetch(`${baseUrl}/models`, {
+            headers: buildLlmHeaders(provider?.apiKey || ''),
+        });
+        if (!response.ok) { throw new Error(`HTTP ${response.status}`); }
+        const data = await response.json();
+        const models = (Array.isArray(data?.data) ? data.data : [])
+            .map(item => ({ id: item.id || item.name || String(item) }))
+            .filter(item => item.id);
+        logger.info(`[LLM请求] /models 成功, 数量: ${models.length}`);
+        return models;
+    }
+
+    async function getLlmCharacterDetailCached(characterId) {
+        if (!characterId) { return null; }
+        const key = `ede_llm_character_detail_v1_${characterId}`;
+        const cached = readLlmTimedCache(key, 30 * 24 * 60 * 60 * 1000);
+        if (cached) { return cached; }
+        const detail = await fetchJson(bangumiApi.getCharacter(characterId), { timeoutMs: 12000 }).catch(() => null);
+        if (!detail) { return null; }
+        const compact = {
+            id: detail.id,
+            name: detail.name,
+            name_cn: detail.name_cn,
+            images: detail.images,
+            summary: detail.summary || '',
+            infobox: detail.infobox || [],
+            gender: detail.gender,
+            blood_type: detail.blood_type,
+            birth_year: detail.birth_year,
+            birth_mon: detail.birth_mon,
+            birth_day: detail.birth_day,
+        };
+        writeLlmTimedCache(key, compact);
+        return compact;
+    }
+
+    function sortLlmCharacters(characters) {
+        const relationRank = relation => {
+            const text = String(relation || '');
+            if (text.includes('主角')) { return 0; }
+            if (text.includes('配角')) { return 1; }
+            if (text.includes('客串')) { return 2; }
+            if (text.includes('路人')) { return 3; }
+            return 4;
+        };
+        return (Array.isArray(characters) ? characters : [])
+            .map((character, index) => ({ character, index }))
+            .sort((a, b) => relationRank(a.character?.relation) - relationRank(b.character?.relation) || a.index - b.index)
+            .map(item => item.character);
+    }
+
+    function getLlmDisplayName(character, detail) {
+        return getLlmInfoboxValue(detail, '简体中文名') || detail?.name_cn || character?.name_cn || character?.name || '未知角色';
+    }
+
+    function getLlmInfoboxValue(detail, keys) {
+        const keyList = Array.isArray(keys) ? keys : [keys];
+        const items = Array.isArray(detail?.infobox) ? detail.infobox : [];
+        const matched = items.find(item => keyList.includes(item?.key));
+        return normalizeLlmInfoboxValue(matched?.value);
+    }
+
+    function normalizeLlmInfoboxValue(value) {
+        if (value === null || value === undefined) { return ''; }
+        if (Array.isArray(value)) { return value.map(item => normalizeLlmInfoboxValue(item)).filter(Boolean).join(' / '); }
+        if (typeof value === 'object') { return value.v || value.k || ''; }
+        return String(value).trim();
+    }
+
+    const LLM_PRODUCTION_CACHE_PREFIX = 'ede_production_score_v4_';
+    const LLM_PRODUCTION_BASE_SCORE = 6.8;
+    const LLM_PRODUCTION_TRUST_GATE = 300;
+    const LLM_PRODUCTION_MIN_TOTAL = 30;
+    const LLM_CORE_RESPONSIBILITY_WEIGHT = 0.65;
+    const LLM_PRODUCTION_ROLE_GROUPS = [
+        { id: 'animation', label: '动画制作', current: role => llmRoleHas(role, ['动画制作', 'アニメーション制作', 'animationproduction']) && !llmRoleHas(role, ['制作协力', '制作協力', '协力', '協力', '製作', '制作委员会', '委員会']), history: role => llmRoleHas(role, ['动画制作', 'アニメーション制作', 'animationproduction']) && !llmRoleHas(role, ['制作协力', '制作協力', '协力', '協力', '製作', '制作委员会', '委員会']) ? 1 : 0 },
+        { id: 'director', label: '监督 / 导演', current: matchLlmDirectorRole, history: role => matchLlmDirectorRole(role) ? 1 : (llmRoleHas(role, ['演出', '分镜', '絵コンテ', 'コンテ']) ? 0.25 : 0) },
+        { id: 'series', label: '系列构成', current: role => llmRoleHas(role, ['系列构成', 'シリーズ構成']), history: role => llmRoleHas(role, ['系列构成', 'シリーズ構成']) ? 1 : (llmRoleHas(role, ['脚本', '剧本', 'シナリオ']) ? 0.65 : 0) },
+        { id: 'script', label: '脚本', current: role => llmRoleHas(role, ['脚本', '剧本', 'シナリオ']), history: role => llmRoleHas(role, ['脚本', '剧本', 'シナリオ']) ? 1 : (llmRoleHas(role, ['系列构成', 'シリーズ構成']) ? 0.65 : 0) },
+        { id: 'original', label: '原作 / 人物原案', current: role => llmRoleHas(role, ['原作', '人物原案', '角色原案', 'キャラクター原案', '原案']), history: role => llmRoleHas(role, ['原作', '人物原案', '角色原案', 'キャラクター原案', '原案']) ? 1 : (llmRoleHas(role, ['插图', '插畫', 'イラスト']) ? 0.35 : 0) },
+        { id: 'characterDesign', label: '人物设定', current: role => llmRoleHas(role, ['人物设定', '人物設定', '角色设计', '角色設計', 'キャラクターデザイン', 'characterdesign']), history: matchLlmCharacterDesignHistory },
+        { id: 'chiefAnimationDirector', label: '总作画监督', current: role => llmRoleHas(role, ['总作画监督', '總作画監督', '総作画監督', 'chiefanimationdirector']), history: role => llmRoleHas(role, ['总作画监督', '總作画監督', '総作画監督', 'chiefanimationdirector']) ? 1 : (llmRoleHas(role, ['作画监督', '作画監督']) ? 0.45 : 0) },
+        { id: 'animationProducer', label: '动画制片人', current: role => llmRoleHas(role, ['动画制片人', '动画制片', 'アニメーションプロデューサー']), history: role => llmRoleHas(role, ['动画制片人', '动画制片', 'アニメーションプロデューサー']) ? 1 : (llmRoleHas(role, ['制片人', 'プロデューサー']) && !llmRoleHas(role, ['执行制片', '制作人']) ? 0.45 : 0) },
+        { id: 'oped', label: 'OP / ED', current: role => llmRoleHas(role, ['op', 'ed', 'opening', 'ending', 'オープニング', 'エンディング']) && llmRoleHas(role, ['演出', '分镜', '絵コンテ', 'コンテ', '导演', '監督', '监督']), history: role => llmRoleHas(role, ['op', 'ed', 'opening', 'ending', 'オープニング', 'エンディング']) && llmRoleHas(role, ['演出', '分镜', '絵コンテ', 'コンテ', '导演', '監督', '监督']) ? 1 : 0 },
+    ];
+
+    function buildLlmCoreStaffSections(persons) {
+        const safePersons = Array.isArray(persons) ? persons : [];
+        return LLM_PRODUCTION_ROLE_GROUPS.map(group => {
+            const byId = new Map();
+            safePersons.forEach(person => {
+                const relation = person?.relation || '';
+                if (!person?.id || !group.current(relation)) { return; }
+                const key = String(person.id);
+                const existing = byId.get(key);
+                if (existing) {
+                    existing.relations = uniqueLlmTextList([...existing.relations, relation]);
+                } else {
+                    byId.set(key, { group, person, relations: [relation], analysis: null, personDetail: null });
+                }
+            });
+            return { group, rows: Array.from(byId.values()) };
+        });
+    }
+
+    async function analyzeLlmStaffRow(row, currentSubjectId) {
+        row.personDetail = await getLlmPersonDetailCached(row.person.id).catch(() => null);
+        const subjects = await getLlmPersonSubjectsCached(row.person.id).catch(() => []);
+        const candidates = collectLlmStaffCandidateSubjects(subjects, row.group, currentSubjectId).slice(0, 28);
+        const works = await mapLimitLlm(candidates, 3, async candidate => {
+            const detail = await getLlmSubjectDetailCached(candidate.subject.id);
+            return buildLlmScoredWork(candidate, detail);
+        });
+        const validWorks = works.filter(work => work && work.rawScore > 0 && work.total >= LLM_PRODUCTION_MIN_TOTAL);
+        const scoredWorks = validWorks.filter(work => work.weight > 0);
+        row.analysis = calcLlmStaffScore(scoredWorks);
+        row.analysis.works = validWorks.sort((a, b) => b.trustedScore - a.trustedScore);
+        row.analysis.candidateCount = candidates.length;
+        return row.analysis;
+    }
+
+    function collectLlmStaffCandidateSubjects(subjects, group, currentSubjectId) {
+        const byId = new Map();
+        (Array.isArray(subjects) ? subjects : []).forEach(subject => {
+            if (!subject?.id || subject.type !== 2 || String(subject.id) === String(currentSubjectId)) { return; }
+            const roleWeight = group.history(subject.staff || '');
+            if (!roleWeight) { return; }
+            const key = String(subject.id);
+            const existing = byId.get(key);
+            if (existing) {
+                existing.roleWeight = Math.max(existing.roleWeight, roleWeight);
+                existing.role = uniqueLlmTextList([existing.role, subject.staff]).join(' / ');
+            } else {
+                byId.set(key, { subject, roleWeight, role: subject.staff || '' });
+            }
+        });
+        return Array.from(byId.values()).sort((a, b) => b.roleWeight - a.roleWeight || Number(b.subject.id) - Number(a.subject.id));
+    }
+
+    function buildLlmScoredWork(candidate, detail) {
+        const rawScore = Number(detail?.rating?.score || 0);
+        const total = Number(detail?.rating?.total || 0);
+        const trustedScore = calcLlmTrustedScore(rawScore, total);
+        return {
+            id: detail?.id || candidate.subject.id,
+            title: detail?.name_cn || detail?.name || candidate.subject.name_cn || candidate.subject.name || '未知作品',
+            role: candidate.role,
+            roleWeight: candidate.roleWeight,
+            rawScore,
+            total,
+            trustedScore,
+            weight: Math.sqrt(Math.min(total, 5000)) * candidate.roleWeight,
+        };
+    }
+
+    function calcLlmStaffScore(works) {
+        const validCount = works.length;
+        const coreWorks = works.filter(isLlmCoreResponsibilityWork);
+        if (validCount < 2) {
+            return { score: null, validCount, coreCount: coreWorks.length, accidentCount: 0, severeAccidentCount: 0, problemWorks: [], works };
+        }
+        const weightSum = works.reduce((sum, work) => sum + work.weight, 0);
+        const baseScore = weightSum ? works.reduce((sum, work) => sum + work.trustedScore * work.weight, 0) / weightSum : null;
+        const accidentWorks = coreWorks.filter(work => work.rawScore < 5 && work.total >= 200);
+        const severeAccidentWorks = coreWorks.filter(work => work.rawScore < 4.3 && work.total >= 500);
+        const penalty = accidentWorks.reduce((sum, work) => {
+            if (work.rawScore < 4 && work.total >= 800) { return sum + 0.55; }
+            if (work.rawScore < 4.5 && work.total >= 500) { return sum + 0.34; }
+            return sum + 0.16;
+        }, 0);
+        const sampleCap = validCount <= 2 ? 6.2 : (validCount <= 4 ? 6.8 : 10);
+        const score = baseScore ? Math.max(1, Math.min(sampleCap, baseScore - penalty)) : null;
+        return {
+            score,
+            baseScore,
+            validCount,
+            coreCount: coreWorks.length,
+            accidentCount: accidentWorks.length,
+            severeAccidentCount: severeAccidentWorks.length,
+            problemWorks: accidentWorks.sort((a, b) => a.rawScore - b.rawScore),
+            works,
+        };
+    }
+
+    function isLlmCoreResponsibilityWork(work) {
+        return Number(work?.roleWeight || 0) >= LLM_CORE_RESPONSIBILITY_WEIGHT;
+    }
+
+    function calcLlmTrustedScore(rawScore, total) {
+        if (!rawScore || !total) { return 0; }
+        return (total / (total + LLM_PRODUCTION_TRUST_GATE)) * rawScore + (LLM_PRODUCTION_TRUST_GATE / (total + LLM_PRODUCTION_TRUST_GATE)) * LLM_PRODUCTION_BASE_SCORE;
+    }
+
+    function matchLlmDirectorRole(role) {
+        if (!llmRoleHas(role, ['导演', '監督', '监督', '総監督', '总监督'])) { return false; }
+        return !llmRoleHas(role, ['音响监督', '音響監督', '摄影监督', '撮影監督', '美术监督', '美術監督', '作画监督', '作画監督', '总作画监督', '総作画監督', 'cg监督', 'cg导演', '3d监督', '3d导演']);
+    }
+
+    function matchLlmCharacterDesignHistory(role) {
+        if (llmRoleHas(role, ['人物设定', '人物設定', '角色设计', '角色設計', 'キャラクターデザイン', 'characterdesign'])) { return 1; }
+        if (llmRoleHas(role, ['总作画监督', '總作画監督', '総作画監督', 'chiefanimationdirector'])) { return 0.55; }
+        return llmRoleHas(role, ['作画监督', '作画監督']) ? 0.35 : 0;
+    }
+
+    function llmRoleHas(role, words) {
+        const text = String(role || '').replace(/\s+/g, '').replace(/[：:]/g, '').toLowerCase();
+        return words.some(word => text.includes(String(word).replace(/\s+/g, '').replace(/[：:]/g, '').toLowerCase()));
+    }
+
+    function getLlmPersonDisplayName(person, detail) {
+        return detail?.name_cn || detail?.name || person?.name_cn || person?.name || '未知人物';
+    }
+
+    async function getLlmSubjectPersonsCached(subjectId) {
+        return getLlmCachedJson(`${LLM_PRODUCTION_CACHE_PREFIX}subject_persons_${subjectId}`, 14 * 24 * 60 * 60 * 1000, () => fetchJson(bangumiApi.getSubjectPersons(subjectId), { timeoutMs: 12000 }));
+    }
+
+    async function getLlmPersonSubjectsCached(personId) {
+        return getLlmCachedJson(`${LLM_PRODUCTION_CACHE_PREFIX}person_subjects_${personId}`, 14 * 24 * 60 * 60 * 1000, () => fetchJson(bangumiApi.getPersonSubjects(personId), { timeoutMs: 12000 }));
+    }
+
+    async function getLlmPersonDetailCached(personId) {
+        return getLlmCachedJson(`${LLM_PRODUCTION_CACHE_PREFIX}person_detail_${personId}`, 30 * 24 * 60 * 60 * 1000, async () => {
+            const detail = await fetchJson(bangumiApi.getPerson(personId), { timeoutMs: 12000 });
+            return {
+                id: detail?.id,
+                name: detail?.name,
+                name_cn: detail?.name_cn,
+                type: detail?.type,
+                images: detail?.images,
+                summary: detail?.summary || detail?.short_summary || '',
+                short_summary: detail?.short_summary || '',
+                infobox: detail?.infobox || [],
+            };
+        });
+    }
+
+    async function getLlmSubjectDetailCached(subjectId) {
+        return getLlmCachedJson(`${LLM_PRODUCTION_CACHE_PREFIX}subject_${subjectId}`, 30 * 24 * 60 * 60 * 1000, async () => {
+            const detail = await fetchJson(bangumiApi.getSubject(subjectId), { timeoutMs: 12000 });
+            return {
+                id: detail?.id,
+                type: detail?.type,
+                name: detail?.name,
+                name_cn: detail?.name_cn,
+                date: detail?.date,
+                rating: detail?.rating,
+            };
+        });
+    }
+
+    async function getLlmCachedJson(key, ttl, loader) {
+        const cached = readLlmTimedCache(key, ttl);
+        if (cached) { return cached; }
+        const data = await loader();
+        writeLlmTimedCache(key, data);
+        return data;
+    }
+
+    function readLlmTimedCache(key, ttl) {
+        try {
+            const raw = localStorage.getItem(key);
+            if (!raw) { return null; }
+            const parsed = JSON.parse(raw);
+            if (!parsed || Date.now() - Number(parsed.time || 0) > ttl) { return null; }
+            return parsed.data;
+        } catch (error) {
+            return null;
+        }
+    }
+
+    function writeLlmTimedCache(key, data) {
+        try {
+            localStorage.setItem(key, JSON.stringify({ time: Date.now(), data }));
+        } catch (error) {
+            logger.debug('[LLM上下文] 缓存写入失败', error.message || error);
+        }
+    }
+
+    function uniqueLlmTextList(list) {
+        const seen = new Set();
+        return (Array.isArray(list) ? list : []).filter(item => {
+            const text = String(item || '').trim();
+            if (!text || seen.has(text)) { return false; }
+            seen.add(text);
+            return true;
+        });
+    }
+
+    async function mapLimitLlm(items, limit, worker) {
+        const safeItems = Array.isArray(items) ? items : [];
+        const result = new Array(safeItems.length);
+        let index = 0;
+        const runners = Array.from({ length: Math.min(limit, safeItems.length) }, async () => {
+            while (index < safeItems.length) {
+                const current = index++;
+                try {
+                    result[current] = await worker(safeItems[current], current);
+                } catch (error) {
+                    logger.debug('[LLM上下文] mapLimit 任务失败', error.message || error);
+                    result[current] = null;
+                }
+            }
+        });
+        await Promise.all(runners);
+        return result;
+    }
+
+    async function getLlmSubtitleContext(item, currentTime, range) {
+        if (!item?.MediaSources?.length) { return { text: '未获取到媒体源。', count: 0 }; }
+        const mediaSource = item.MediaSources[0];
+        const streams = mediaSource.MediaStreams || item.MediaStreams || [];
+        const subtitleStreams = streams.filter(stream => String(stream.Type || '').toLowerCase() === 'subtitle');
+        logger.info('[LLM字幕] 字幕流列表:', subtitleStreams.map(stream => ({
+            Index: stream.Index,
+            Language: stream.Language,
+            DisplayTitle: stream.DisplayTitle,
+            Codec: stream.Codec,
+            IsExternal: stream.IsExternal,
+            IsDefault: stream.IsDefault,
+            DeliveryUrl: stream.DeliveryUrl,
+        })));
+        if (subtitleStreams.length < 1) { return { text: '未发现字幕流。', count: 0 }; }
+        const selected = selectLlmSubtitleStream(subtitleStreams);
+        logger.info('[LLM字幕] 选中字幕:', selected);
+        const subtitleText = await fetchLlmSubtitleText(item, mediaSource, selected);
+        const cues = parseSubtitleText(subtitleText, selected);
+        const filtered = (range === 'all' ? cues : cues.filter(cue => cue.start <= currentTime))
+            .slice(range === 'all' ? -2000 : -1200);
+        const text = filtered.length
+            ? filtered.map(cue => `${formatLlmTime(cue.start)} ${cue.text}`).join('\n')
+            : '字幕为空或未匹配到当前时间之前的字幕。';
+        logger.info(`[LLM字幕] 解析=${cues.length}, 使用=${filtered.length}, range=${range}`);
+        return { text, count: filtered.length };
+    }
+
+    function selectLlmSubtitleStream(streams) {
+        const preferredLang = ['chi', 'zho', 'chs', 'cht', 'sc', 'tc', 'zh', 'cn', 'chinese'];
+        const score = stream => {
+            const text = `${stream.Language || ''} ${stream.DisplayTitle || ''} ${stream.Title || ''}`.toLowerCase();
+            let value = 0;
+            if (preferredLang.some(lang => text.includes(lang)) || /中|简|繁/.test(text)) { value += 100; }
+            if (stream.IsDefault) { value += 20; }
+            if (stream.IsForced) { value += 5; }
+            if (stream.IsExternal) { value += 8; }
+            return value;
+        };
+        return [...streams].sort((a, b) => score(b) - score(a))[0];
+    }
+
+    async function fetchLlmSubtitleText(item, mediaSource, stream) {
+        const apiKey = ApiClient.accessToken();
+        const serverAddress = ApiClient.serverAddress();
+        const isEmby = serverAddress.includes('/emby/') || ApiClient.appName().toLowerCase().includes('emby');
+        const extraStr = isEmby ? '/emby' : '';
+        const urls = [];
+        if (stream.DeliveryUrl) {
+            urls.push(toAbsoluteEmbyUrl(stream.DeliveryUrl));
+        }
+        ['vtt', 'srt', 'ass'].forEach(format => {
+            urls.push(`${serverAddress}${extraStr}/Videos/${item.Id}/${mediaSource.Id}/Subtitles/${stream.Index}/Stream.${format}?api_key=${apiKey}`);
+            urls.push(`${serverAddress}${extraStr}/videos/${item.Id}/${mediaSource.Id}/Subtitles/${stream.Index}/Stream.${format}?api_key=${apiKey}`);
+        });
+        const uniqueUrls = [...new Set(urls.filter(Boolean))];
+        let lastError = null;
+        for (const url of uniqueUrls) {
+            try {
+                logger.info('[LLM字幕] 尝试下载:', sanitizeUrlForLog(url));
+                const response = await fetch(url, { headers: { Accept: 'text/vtt,text/plain,*/*' } });
+                const text = await response.text();
+                if (!response.ok) { throw new Error(`HTTP ${response.status}: ${text.slice(0, 80)}`); }
+                if (!text.trim()) { throw new Error('字幕文本为空'); }
+                logger.info(`[LLM字幕] 下载成功 length=${text.length}`);
+                return text;
+            } catch (error) {
+                lastError = error;
+                logger.warn('[LLM字幕] 下载失败:', error.message || error);
+            }
+        }
+        throw lastError || new Error('字幕下载失败');
+    }
+
+    function toAbsoluteEmbyUrl(url) {
+        if (!url) { return ''; }
+        if (/^https?:\/\//i.test(url)) { return url; }
+        const serverAddress = ApiClient.serverAddress().replace(/\/+$/, '');
+        return `${serverAddress}${url.startsWith('/') ? '' : '/'}${url}`;
+    }
+
+    function sanitizeUrlForLog(url) {
+        return String(url || '').replace(/([?&](api_key|X-Emby-Token)=)[^&]+/ig, '$1***');
+    }
+
+    function parseSubtitleText(text, stream = {}) {
+        const raw = String(text || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+        if (/^\s*WEBVTT/i.test(raw)) { return parseVttOrSrt(raw); }
+        if (/^\s*\[Script Info\]/i.test(raw) || /^\s*\[Events\]/im.test(raw)) { return parseAssSubtitle(raw); }
+        if (/^\s*\d+\s*\n\s*\d{1,2}:\d{2}:\d{2}[,.]\d{1,3}\s*-->/m.test(raw)) { return parseVttOrSrt(raw); }
+        logger.warn('[LLM字幕] 未识别字幕格式，按纯文本兜底:', stream.Codec || '');
+        return raw.split('\n').map((line, index) => ({ start: index, end: index, text: cleanLlmText(line) })).filter(cue => cue.text);
+    }
+
+    function parseVttOrSrt(text) {
+        const blocks = String(text || '').split(/\n{2,}/);
+        const cues = [];
+        blocks.forEach(block => {
+            const lines = block.split('\n').map(line => line.trim()).filter(Boolean);
+            const timeIndex = lines.findIndex(line => line.includes('-->'));
+            if (timeIndex < 0) { return; }
+            const [startText, endText] = lines[timeIndex].split('-->').map(part => part.trim().split(/\s+/)[0]);
+            const cueText = lines.slice(timeIndex + 1).join(' ');
+            const cleanText = cleanSubtitleLine(cueText);
+            if (cleanText) { cues.push({ start: parseSubtitleTime(startText), end: parseSubtitleTime(endText), text: cleanText }); }
+        });
+        return cues.filter(cue => Number.isFinite(cue.start)).sort((a, b) => a.start - b.start);
+    }
+
+    function parseAssSubtitle(text) {
+        const cues = [];
+        String(text || '').split('\n').forEach(line => {
+            if (!line.startsWith('Dialogue:')) { return; }
+            const payload = line.slice('Dialogue:'.length);
+            const parts = payload.split(',');
+            if (parts.length < 10) { return; }
+            const start = parseSubtitleTime(parts[1]);
+            const end = parseSubtitleTime(parts[2]);
+            const cueText = parts.slice(9).join(',');
+            const cleanText = cleanSubtitleLine(cueText);
+            if (cleanText) { cues.push({ start, end, text: cleanText }); }
+        });
+        return cues.filter(cue => Number.isFinite(cue.start)).sort((a, b) => a.start - b.start);
+    }
+
+    function parseSubtitleTime(timeText) {
+        const match = String(timeText || '').trim().match(/(?:(\d+):)?(\d{1,2}):(\d{2})(?:[,.](\d{1,3}))?/);
+        if (!match) { return NaN; }
+        const hours = Number(match[1] || 0);
+        const minutes = Number(match[2] || 0);
+        const seconds = Number(match[3] || 0);
+        const ms = Number((match[4] || '0').padEnd(3, '0').slice(0, 3));
+        return hours * 3600 + minutes * 60 + seconds + ms / 1000;
+    }
+
+    function cleanSubtitleLine(text) {
+        return cleanLlmText(String(text || '')
+            .replace(/\{\\.*?\}/g, '')
+            .replace(/<[^>]+>/g, '')
+            .replace(/\\N/g, ' ')
+            .replace(/\\n/g, ' '));
+    }
+
+    function cleanLlmCommentContent(content) {
+        return cleanLlmText(String(content || '')
+            .replace(/\r\n/g, '\n')
+            .replace(/\[quote\]/gi, '引用：')
+            .replace(/\[\/quote\]/gi, '\n')
+            .replace(/\[b\]([\s\S]*?)\[\/b\]/gi, '$1'));
+    }
+
+    function cleanLlmText(text) {
+        return String(text || '')
+            .replace(/\[url=([^\]]+)\]([\s\S]*?)\[\/url\]/gi, '$2')
+            .replace(/\[url\]([\s\S]*?)\[\/url\]/gi, '$1')
+            .replace(/\[.*?\]/g, '')
+            .replace(/\s+/g, ' ')
+            .trim();
+    }
+
+    function formatLlmTime(seconds) {
+        const total = Math.max(0, Math.floor(Number(seconds) || 0));
+        const h = Math.floor(total / 3600);
+        const m = Math.floor((total % 3600) / 60);
+        const s = total % 60;
+        return h > 0
+            ? `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+            : `${m}:${String(s).padStart(2, '0')}`;
+    }
+
+    function formatLlmDate(seconds) {
+        if (!seconds) { return ''; }
+        const date = new Date(Number(seconds) * 1000);
+        if (Number.isNaN(date.getTime())) { return ''; }
+        return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+    }
+
     async function showEpisodeDialog(event) {
         try {
             const existingDialog = getById(eleIds.episodeDialog);
@@ -6220,6 +8092,7 @@
         const TRUST_GATE = 300;
         const MIN_RATING_TOTAL = 30;
         const MIN_VALID_WORKS = 2;
+        const CORE_RESPONSIBILITY_WEIGHT = 0.65;
         const MAX_WORKS_PER_PERSON = 40;
         const MAX_SUBJECT_DETAIL_FETCHES = 160;
         const PERSON_SUBJECTS_TTL = 14 * DAY_MS;
@@ -6430,7 +8303,7 @@
 
         function matchDirectorHistory(role) {
             if (matchDirectorRole(role)) { return 1; }
-            if (roleIncludesAny(role, ['演出', '分镜', '絵コンテ', 'コンテ'])) { return 0.45; }
+            if (roleIncludesAny(role, ['演出', '分镜', '絵コンテ', 'コンテ'])) { return 0.25; }
             return 0;
         }
 
@@ -6791,7 +8664,7 @@
             const meta = document.createElement('div');
             const analysis = row.analysis;
             const metaText = analysis
-                ? `翻车概率 ${formatAccidentRate(analysis)} · 近作 ${formatScore(analysis.recentScore)} · 样本 ${analysis.validCount}`
+                ? `核心翻车 ${formatAccidentRate(analysis)} · 近作 ${formatScore(analysis.recentScore)} · 样本 ${analysis.validCount}`
                 : (row.status === 'loading' ? '正在统计历史作品...' : '等待统计');
             meta.textContent = metaText;
             meta.style.cssText = [
@@ -7148,6 +9021,8 @@
                     recentScore: scoreStats?.recentScore || null,
                     accidentCount: scoreStats?.accidentCount || 0,
                     severeAccidentCount: scoreStats?.severeAccidentCount || 0,
+                    coreCount: scoreStats?.coreCount || 0,
+                    problemWorks: scoreStats?.problemWorks || [],
                     validCount: scoredWorks.length,
                     candidateCount: candidates.length,
                     usedBudget: limitedCandidates.length,
@@ -7155,7 +9030,7 @@
                 };
             } catch (error) {
                 logger.warn(`[Bangumi制作评分] 统计失败: ${row.person?.name || row.id}`, error.message || error);
-                return { score: null, baseScore: null, recentScore: null, accidentCount: 0, severeAccidentCount: 0, validCount: 0, candidateCount: 0, usedBudget: 0, works: [] };
+                return { score: null, baseScore: null, recentScore: null, accidentCount: 0, severeAccidentCount: 0, coreCount: 0, problemWorks: [], validCount: 0, candidateCount: 0, usedBudget: 0, works: [] };
             }
         }
 
@@ -7409,8 +9284,9 @@
             const byDate = [...works].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
             const recentWorks = byDate.filter(work => work.year).slice(0, Math.min(6, byDate.length));
             const recentScore = recentWorks.length >= 2 ? calcWeightedScore(recentWorks) : null;
-            const accidentWorks = works.filter(isAccidentWork);
-            const severeAccidentWorks = works.filter(isSevereAccidentWork);
+            const coreWorks = works.filter(isCoreResponsibilityWork);
+            const accidentWorks = coreWorks.filter(isAccidentWork);
+            const severeAccidentWorks = coreWorks.filter(isSevereAccidentWork);
             const recentAccidentWorks = accidentWorks.filter(work => isRecentYear(work.year, 3));
             const veryRecentAccidentWorks = accidentWorks.filter(work => isRecentYear(work.year, 1));
             const accidentPenalty = accidentWorks.reduce((sum, work) => sum + getAccidentPenalty(work), 0);
@@ -7422,9 +9298,15 @@
                 score,
                 baseScore,
                 recentScore,
+                coreCount: coreWorks.length,
                 accidentCount: accidentWorks.length,
                 severeAccidentCount: severeAccidentWorks.length,
+                problemWorks: accidentWorks.sort((a, b) => a.rawScore - b.rawScore),
             };
+        }
+
+        function isCoreResponsibilityWork(work) {
+            return Number(work?.roleWeight || 0) >= CORE_RESPONSIBILITY_WEIGHT;
         }
 
         function isAccidentWork(work) {
@@ -7464,7 +9346,7 @@
         }
 
         function formatAccidentRate(analysis) {
-            const validCount = Number(analysis?.validCount || 0);
+            const validCount = Number(analysis?.coreCount || 0);
             const accidentCount = Number(analysis?.accidentCount || 0);
             if (!validCount) { return '—'; }
             return `${Math.round((accidentCount / validCount) * 100)}%`;
@@ -9356,6 +11238,18 @@
             logger.error('TMDB API Key 验证失败', error);
             throw error;
         }
+    }
+
+    function normalizeLlmBaseUrl(baseUrl) {
+        const raw = String(baseUrl || '').trim().replace(/\/+$/, '');
+        if (!raw) { return ''; }
+        return raw.match(/\/v\d+$/i) ? raw : `${raw}/v1`;
+    }
+
+    function buildLlmHeaders(apiKey) {
+        const headers = { 'Accept': 'application/json', 'Content-Type': 'application/json' };
+        if (apiKey) { headers.Authorization = `Bearer ${apiKey}`; }
+        return headers;
     }
 
 
